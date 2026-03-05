@@ -87,6 +87,7 @@ async def paper_detail(request: Request, paper_id: str):
         {% if paper.venue %}{{ paper.venue }}{% endif %}
         {% if paper.year %}({{ paper.year }}){% endif %}
     </p>
+    {% if paper.category %}<small>{{ paper.category }}</small>{% endif %}
 </hgroup>
 
 <!-- Authors -->
@@ -131,6 +132,9 @@ async def paper_detail(request: Request, paper_id: str):
     {% endif %}
     {% if paper.arxiv_id %}
         · <a href="https://arxiv.org/abs/{{ paper.arxiv_id }}" target="_blank" rel="noopener">arXiv</a>
+    {% endif %}
+    {% if paper.doi %}
+        · <a href="https://doi.org/{{ paper.doi }}" target="_blank" rel="noopener">DOI</a>
     {% endif %}
 </p>
 
@@ -447,6 +451,7 @@ snapshots_json = json.dumps([
 | Scholar Inbox | `{{ paper.url }}` | `paper.url` is not None |
 | Semantic Scholar | `https://www.semanticscholar.org/paper/{{ paper.id }}` | `paper.id` does not start with `title:` |
 | arXiv | `https://arxiv.org/abs/{{ paper.arxiv_id }}` | `paper.arxiv_id` is not None |
+| DOI | `https://doi.org/{{ paper.doi }}` | `paper.doi` is not None |
 
 All external links use `target="_blank" rel="noopener"`.
 

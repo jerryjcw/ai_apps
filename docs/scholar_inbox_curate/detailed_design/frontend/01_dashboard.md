@@ -17,34 +17,20 @@ async def dashboard(request: Request):
     db_path = request.app.state.db_path
 
     with get_connection(db_path) as conn:
-        counts = get_paper_count_by_status(conn)
-        trending_count = conn.execute(
-            "SELECT COUNT(*) FROM papers "
-            "WHERE status IN ('active', 'promoted') AND citation_velocity > 5.0"
-        ).fetchone()[0]
-        recent_count = conn.execute(
-            "SELECT COUNT(*) FROM papers "
-            "WHERE julianday('now') - julianday(ingested_at) <= 7"
-        ).fetchone()[0]
-        top_papers = conn.execute(
-            "SELECT id, title, authors, citation_count, citation_velocity, status "
-            "FROM papers WHERE status IN ('active', 'promoted') AND citation_velocity > 0 "
-            "ORDER BY citation_velocity DESC LIMIT 10"
-        ).fetchall()
+        stats = get_dashboard_statistics(conn)
+        top_papers = get_trending_papers(conn, limit=10)
         recent_runs = get_recent_ingestion_runs(conn, limit=5)
-
-    total_papers = counts.get("active", 0) + counts.get("promoted", 0)
 
     # Compute next poll time from cron expression
     next_poll = _next_cron_run(config.citations.poll_schedule_cron)
 
     return templates.TemplateResponse("dashboard.html", {
         **_base_context(request),
-        "total_papers": total_papers,
-        "trending_count": trending_count,
-        "recent_count": recent_count,
+        "total_papers": stats["total_papers"],
+        "trending_count": stats["trending_count"],
+        "recent_count": stats["recently_ingested"],
         "next_poll": next_poll,
-        "top_papers": [dict(row) for row in top_papers],
+        "top_papers": top_papers,
         "recent_runs": [dict(row) for row in recent_runs],
     })
 ```
@@ -61,6 +47,12 @@ async def dashboard(request: Request):
 | `next_poll` | `str` | Next scheduled poll time, e.g., "Wed, Mar 4 at 06:00" or the cron schedule description if scheduler is not running |
 | `top_papers` | `list[dict]` | Top 10 papers by velocity (keys: `id`, `title`, `authors`, `citation_count`, `citation_velocity`, `status`) |
 | `recent_runs` | `list[dict]` | Last 5 ingestion runs (keys: `id`, `started_at`, `finished_at`, `papers_found`, `papers_ingested`, `status`, `error_message`) |
+
+### Backend Functions Used
+
+- `get_dashboard_statistics(conn)` from `src/db.py` — returns a dict with `total_papers`, `active`, `promoted`, `pruned`, `trending_count`, `recently_ingested`, `papers_due_for_poll`.
+- `get_trending_papers(conn, limit=10)` from `src/db.py` — returns a `list[dict]` of papers ordered by `citation_velocity` DESC (keys: `id`, `title`, `authors`, `citation_count`, `citation_velocity`, `status`).
+- `get_recent_ingestion_runs(conn, limit=5)` from `src/db.py` — returns recent ingestion runs.
 
 ---
 

@@ -1,0 +1,105 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard — Scholar Inbox Curate{% endblock %}
+
+{% block content %}
+
+<!-- Summary Cards -->
+<div class="grid">
+    {% with card_label="Papers Tracked", card_value=total_papers %}
+        {% include "components/_summary_card.html" %}
+    {% endwith %}
+
+    {% with card_label="Trending (>5/mo)", card_value=trending_count %}
+        {% include "components/_summary_card.html" %}
+    {% endwith %}
+
+    {% with card_label="Added This Week", card_value=recent_count %}
+        {% include "components/_summary_card.html" %}
+    {% endwith %}
+
+    {% with card_label="Next Poll", card_value=next_poll %}
+        {% include "components/_summary_card.html" %}
+    {% endwith %}
+</div>
+
+<!-- Top Papers by Velocity -->
+<section>
+    <h2>Top Papers by Velocity</h2>
+
+    {% if top_papers %}
+    <div class="table-responsive">
+        <table>
+            <caption class="sr-only">Top 10 papers ranked by citation velocity</caption>
+            <thead>
+                <tr>
+                    <th scope="col">#</th>
+                    <th scope="col">Title</th>
+                    <th scope="col">Authors</th>
+                    <th scope="col">Citations</th>
+                    <th scope="col">Velocity</th>
+                    <th scope="col">Status</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for paper in top_papers %}
+                <tr>
+                    <td>{{ loop.index }}</td>
+                    <td class="title-cell">
+                        <a href="/papers/{{ paper.id }}">{{ paper.title|truncate(80) }}</a>
+                    </td>
+                    <td>{{ paper.authors|first_author }}</td>
+                    <td>{{ paper.citation_count }}</td>
+                    <td>{{ "%.1f"|format(paper.citation_velocity) }} /mo</td>
+                    <td>{% with status=paper.status %}{% include "components/_status_badge.html" %}{% endwith %}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <p>No papers tracked yet. <a href="/settings">Run an ingestion</a> to get started.</p>
+    {% endif %}
+</section>
+
+<!-- Recent Activity -->
+<section>
+    <h2>Recent Activity</h2>
+
+    {% if recent_runs %}
+    <div class="table-responsive">
+        <table>
+            <caption class="sr-only">Recent ingestion runs</caption>
+            <thead>
+                <tr>
+                    <th scope="col">Date</th>
+                    <th scope="col">Papers Found</th>
+                    <th scope="col">New Papers</th>
+                    <th scope="col">Duration</th>
+                    <th scope="col">Status</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for run in recent_runs %}
+                <tr>
+                    <td>{{ run.started_at|relative_date }}</td>
+                    <td>{{ run.papers_found }}</td>
+                    <td>{{ run.papers_ingested }}</td>
+                    <td>{{ run.started_at|format_duration(run.finished_at) }}</td>
+                    <td>
+                        <span class="run-status-{{ run.status }}">{{ run.status|capitalize }}</span>
+                        {% if run.error_message %}
+                        <small title="{{ run.error_message }}">(hover for details)</small>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <p>No ingestion runs yet.</p>
+    {% endif %}
+</section>
+
+{% endblock %}

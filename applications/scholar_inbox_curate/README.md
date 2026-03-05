@@ -47,6 +47,44 @@ citation_threshold = 50
 velocity_threshold = 10.0
 ```
 
+### Starting the Web UI
+
+The web UI is the primary interface for browsing papers and triggering operations.
+
+```bash
+# Web UI only (no scheduler)
+.venv/bin/scholar-curate --config config.toml serve
+
+# Web UI + automated scheduler together
+.venv/bin/scholar-curate --config config.toml run --with-web
+
+# Custom host/port
+.venv/bin/scholar-curate --config config.toml serve --host 0.0.0.0 --port 8080
+```
+
+Then open **http://127.0.0.1:8000** in your browser.
+
+#### Web UI Pages
+
+| Page | URL | Description |
+|------|-----|-------------|
+| Dashboard | `/dashboard` | Summary cards (papers tracked, trending, next poll), top papers by citation velocity, recent ingestion runs |
+| Papers | `/papers` | Full paper list with search, status filter, sortable columns, pagination |
+| Paper Detail | `/papers/{id}` | Full metadata, citation history chart, status controls (promote/prune/restore) |
+| Settings | `/settings` | Config display, manual trigger buttons, ingestion run history |
+
+#### Manual Triggers (Settings page)
+
+| Button | Action |
+|--------|--------|
+| Run Ingestion | Scrape Scholar Inbox for today's recommendations |
+| Poll Citations | Fetch updated citation counts for tracked papers |
+| Run Rules | Apply prune/promote rules immediately |
+| Run Backfill | Scrape any missed digest dates in the lookback window |
+| Collect Citations | Collect citation data for papers never polled |
+
+---
+
 ### Running the CLI
 
 ```bash
@@ -284,7 +322,29 @@ src/
 │   ├── pruning.py         # Paper pruning logic
 │   └── promotion.py       # Paper promotion logic
 └── web/
-    └── app.py             # FastAPI web interface
+    ├── app.py             # FastAPI app factory, route registration
+    ├── filters.py         # Custom Jinja2 filters (relative_date, first_author, etc.)
+    ├── routes/
+    │   ├── dashboard.py   # Dashboard page handler
+    │   ├── papers.py      # Paper list, detail, status update handlers
+    │   ├── settings.py    # Settings page handler
+    │   └── triggers.py    # HTMX trigger handlers (ingest, poll, rules, etc.)
+    ├── templates/
+    │   ├── base.html      # Base layout (nav, CDN links, HTMX error handlers)
+    │   ├── error.html     # 404/500 error page
+    │   ├── dashboard.html
+    │   ├── settings.html
+    │   ├── papers/
+    │   │   ├── list.html
+    │   │   ├── detail.html
+    │   │   └── _rows.html  # HTMX partial: table rows + pagination
+    │   └── components/
+    │       ├── _summary_card.html
+    │       ├── _status_badge.html
+    │       ├── _status_section.html
+    │       └── _citation_chart.html
+    └── static/
+        └── style.css      # Custom overrides on Pico CSS
 
 tests/
 ├── conftest.py            # Pytest fixtures

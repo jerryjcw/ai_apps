@@ -1,0 +1,17 @@
+{% if snapshot_count >= 2 %}
+    <div style="position: relative; max-height: 400px;">
+        <canvas id="citationChart"></canvas>
+    </div>
+    <!-- Screen reader alternative -->
+    <p class="sr-only">
+        Citation count over time: started at {{ snapshots[0].total_citations }} on {{ snapshots[0].checked_at[:10] }},
+        currently {{ snapshots[-1].total_citations }} on {{ snapshots[-1].checked_at[:10] }}.
+    </p>
+{% elif snapshot_count == 1 %}
+    <p>
+        <strong>{{ snapshots[0].total_citations }}</strong> citations as of {{ snapshots[0].checked_at[:10] }}.
+        More data points needed for a chart.
+    </p>
+{% else %}
+    <p>No citation data yet. Citation tracking will populate this over time.</p>
+{% endif %}

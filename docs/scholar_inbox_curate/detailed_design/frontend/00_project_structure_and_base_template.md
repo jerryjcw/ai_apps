@@ -44,7 +44,7 @@ def create_app(config: AppConfig) -> FastAPI:
 **Design decisions:**
 
 - `docs_url=None, redoc_url=None` — disables Swagger/ReDoc (not needed for a server-rendered app).
-- All routes are registered in `app.py` directly — no separate router files. The entire frontend has ~10 routes; splitting into files adds indirection without benefit.
+- All routes are registered in `app.py` directly — no separate router files. The entire frontend has ~12 routes; splitting into files adds indirection without benefit.
 - `config` and `db_path` are stored on `app.state` so route handlers access them via `request.app.state.config`.
 
 ### Route Registration
@@ -88,6 +88,14 @@ def _register_routes(app: FastAPI, templates: Jinja2Templates):
 
     @app.post("/partials/trigger-rules")
     async def trigger_rules(request: Request):
+        ...
+
+    @app.post("/partials/trigger-backfill")
+    async def trigger_backfill(request: Request):
+        ...
+
+    @app.post("/partials/trigger-collect")
+    async def trigger_collect(request: Request):
         ...
 
     @app.post("/papers/{paper_id}/status")
