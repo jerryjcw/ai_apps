@@ -1,0 +1,43 @@
+<div id="status-section">
+    <strong>Status:</strong>
+    {% with status=paper.status %}{% include "components/_status_badge.html" %}{% endwith %}
+    {% if paper.manual_status %}
+        <small>(manually set)</small>
+    {% endif %}
+
+    {% if paper.status == 'active' %}
+        <button hx-post="/papers/{{ paper.id }}/status"
+                hx-vals='{"status": "promoted"}'
+                hx-target="#status-section"
+                hx-swap="outerHTML"
+                class="outline"
+                style="margin-left: 0.5rem;">
+            Promote
+        </button>
+        <button hx-post="/papers/{{ paper.id }}/status"
+                hx-vals='{"status": "pruned"}'
+                hx-target="#status-section"
+                hx-swap="outerHTML"
+                hx-confirm="Prune this paper? It will be hidden from active views."
+                class="outline secondary"
+                style="margin-left: 0.25rem;">
+            Prune
+        </button>
+    {% elif paper.status == 'pruned' %}
+        <button hx-post="/papers/{{ paper.id }}/status"
+                hx-vals='{"status": "active"}'
+                hx-target="#status-section"
+                hx-swap="outerHTML"
+                class="outline">
+            Restore to Active
+        </button>
+    {% elif paper.status == 'promoted' %}
+        <button hx-post="/papers/{{ paper.id }}/status"
+                hx-vals='{"status": "active"}'
+                hx-target="#status-section"
+                hx-swap="outerHTML"
+                class="outline secondary">
+            Demote to Active
+        </button>
+    {% endif %}
+</div>

@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="auto">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{% block title %}Scholar Inbox Curate{% endblock %}</title>
+
+    <!-- Pico CSS -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
+
+    <!-- Custom overrides -->
+    <link rel="stylesheet" href="{{ url_for('static', path='style.css') }}">
+
+    <!-- HTMX -->
+    <script src="https://unpkg.com/htmx.org@1.9.12"></script>
+
+    {% block extra_head %}{% endblock %}
+</head>
+<body>
+
+    <header class="container">
+        <nav>
+            <ul>
+                <li><strong>Scholar Inbox Curate</strong></li>
+            </ul>
+            <ul>
+                <li>
+                    <a href="/dashboard"
+                       {% if current_path.startswith('/dashboard') %}aria-current="page"{% endif %}>
+                        Dashboard
+                    </a>
+                </li>
+                <li>
+                    <a href="/papers"
+                       {% if current_path.startswith('/papers') %}aria-current="page"{% endif %}>
+                        Papers
+                    </a>
+                </li>
+                <li>
+                    <a href="/settings"
+                       {% if current_path.startswith('/settings') %}aria-current="page"{% endif %}>
+                        Settings
+                    </a>
+                </li>
+            </ul>
+        </nav>
+    </header>
+
+    <main class="container">
+        {% block content %}{% endblock %}
+    </main>
+
+    <footer class="container">
+        <small>Scholar Inbox Curate v0.1</small>
+    </footer>
+
+    <!-- Global HTMX error handlers -->
+    <script>
+        document.addEventListener('htmx:responseError', function(evt) {
+            var target = evt.detail.target;
+            if (target) {
+                target.innerHTML = '<p role="alert" style="color:var(--color-error)">Request failed. Please try again.</p>';
+            }
+        });
+        document.addEventListener('htmx:sendError', function(evt) {
+            var target = evt.detail.target;
+            if (target) {
+                target.innerHTML = '<p role="alert" style="color:var(--color-error)">Network error. Check your connection.</p>';
+            }
+        });
+    </script>
+
+    {% block extra_scripts %}{% endblock %}
+
+</body>
+</html>

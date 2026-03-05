@@ -34,6 +34,8 @@ GET  /partials/paper-rows     → Filtered/sorted table rows
 POST /partials/trigger-ingest → Trigger ingestion, return status
 POST /partials/trigger-poll   → Trigger citation poll, return status
 POST /partials/trigger-rules  → Trigger prune/promote rules, return status
+POST /partials/trigger-backfill → Trigger backfill of missed dates, return status
+POST /partials/trigger-collect  → Trigger citation collection for unpolled papers, return status
 POST /papers/{id}/status      → Update paper status (promote/prune/restore)
 ```
 
@@ -170,6 +172,8 @@ Buttons that fire HTMX POST requests and show inline status:
 | Run Ingestion    | POST /partials/trigger-ingest | "Running..." → "Done. 5 new papers." |
 | Poll Citations   | POST /partials/trigger-poll   | "Running..." → "Done. 42 papers updated." |
 | Run Prune/Promote | POST /partials/trigger-rules | "Running..." → "Pruned 3, promoted 1." |
+| Run Backfill    | POST /partials/trigger-backfill | "Running..." → "Backfilled 5 dates, 12 new papers." |
+| Collect Citations | POST /partials/trigger-collect | "Running..." → "Collected citations for 8 papers." |
 
 **Ingestion Run History:**
 

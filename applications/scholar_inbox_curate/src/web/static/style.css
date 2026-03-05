@@ -1,0 +1,198 @@
+/* ============================================
+   Scholar Inbox Curate — Custom Overrides
+   ============================================ */
+
+/* --- Color Palette --- */
+:root {
+    --color-success: #22c55e;
+    --color-warning: #eab308;
+    --color-error: #ef4444;
+    --color-info: #3b82f6;
+}
+
+@media (prefers-color-scheme: dark) {
+    :root {
+        --color-success: #4ade80;
+        --color-warning: #facc15;
+        --color-error: #f87171;
+        --color-info: #60a5fa;
+    }
+}
+
+
+/* --- Status Badges --- */
+mark.status-active {
+    background-color: var(--color-info);
+    color: white;
+    padding: 0.15em 0.5em;
+    border-radius: 4px;
+    font-size: 0.85em;
+}
+
+mark.status-promoted {
+    background-color: var(--color-success);
+    color: white;
+    padding: 0.15em 0.5em;
+    border-radius: 4px;
+    font-size: 0.85em;
+}
+
+mark.status-pruned {
+    background-color: var(--color-error);
+    color: white;
+    padding: 0.15em 0.5em;
+    border-radius: 4px;
+    font-size: 0.85em;
+    opacity: 0.8;
+}
+
+
+/* --- Score Badges --- */
+mark.score-high {
+    background-color: var(--color-success);
+    color: white;
+    padding: 0.15em 0.5em;
+    border-radius: 4px;
+}
+
+mark.score-medium {
+    background-color: var(--color-warning);
+    color: black;
+    padding: 0.15em 0.5em;
+    border-radius: 4px;
+}
+
+mark.score-low {
+    background-color: #9ca3af;
+    color: white;
+    padding: 0.15em 0.5em;
+    border-radius: 4px;
+}
+
+
+/* --- Summary Cards --- */
+.card-value {
+    font-size: 2.5rem;
+    font-weight: 700;
+    line-height: 1.2;
+    margin: 0;
+}
+
+article > header {
+    font-size: 0.875rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    opacity: 0.7;
+}
+
+
+/* --- Run Status Colors --- */
+.run-status-completed {
+    color: var(--color-success);
+    font-weight: 600;
+}
+
+.run-status-failed {
+    color: var(--color-error);
+    font-weight: 600;
+}
+
+.run-status-running {
+    color: var(--color-warning);
+    font-weight: 600;
+}
+
+
+/* --- Trigger Result Messages --- */
+.trigger-success {
+    color: var(--color-success);
+    font-weight: 500;
+}
+
+.trigger-error {
+    color: var(--color-error);
+    font-weight: 500;
+}
+
+
+/* --- Table Overrides --- */
+th a {
+    text-decoration: none;
+    color: inherit;
+}
+
+th a:hover {
+    text-decoration: underline;
+}
+
+td.title-cell {
+    max-width: 300px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.table-responsive {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+}
+
+
+/* --- Paper Detail Layout --- */
+.detail-layout {
+    display: grid;
+    grid-template-columns: 1fr 280px;
+    gap: 2rem;
+}
+
+@media (max-width: 768px) {
+    .detail-layout {
+        grid-template-columns: 1fr;
+    }
+}
+
+
+/* --- HTMX Indicators --- */
+.htmx-indicator {
+    display: none;
+}
+
+.htmx-request .htmx-indicator,
+.htmx-request.htmx-indicator {
+    display: inline-block;
+}
+
+
+/* --- Screen Reader Only --- */
+.sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border-width: 0;
+}
+
+
+/* --- Pagination --- */
+nav[aria-label="Pagination"] ul {
+    display: flex;
+    list-style: none;
+    gap: 0.25rem;
+    padding: 0;
+    flex-wrap: wrap;
+}
+
+nav[aria-label="Pagination"] a {
+    padding: 0.25em 0.75em;
+    text-decoration: none;
+    border-radius: 4px;
+}
+
+nav[aria-label="Pagination"] a[aria-current="page"] {
+    background-color: var(--color-info);
+    color: white;
+}

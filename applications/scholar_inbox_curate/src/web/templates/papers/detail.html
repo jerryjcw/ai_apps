@@ -1,0 +1,218 @@
+{% extends "base.html" %}
+
+{% block title %}{{ paper.title|truncate(60) }} — Scholar Inbox Curate{% endblock %}
+
+{% block content %}
+
+<!-- Header -->
+<hgroup>
+    <h1>{{ paper.title }}</h1>
+    <p>
+        {% if paper.venue %}{{ paper.venue }}{% endif %}
+        {% if paper.year %}({{ paper.year }}){% endif %}
+    </p>
+    {% if paper.category %}<small>{{ paper.category }}</small>{% endif %}
+</hgroup>
+
+<!-- Authors -->
+<p>
+    {% if authors|length <= 5 %}
+        {{ authors|join(", ") }}
+    {% else %}
+        {{ authors[:5]|join(", ") }}
+        <details style="display:inline;">
+            <summary>and {{ authors|length - 5 }} more</summary>
+            {{ authors[5:]|join(", ") }}
+        </details>
+    {% endif %}
+    {% if not authors %}
+        <em>Authors unknown</em>
+    {% endif %}
+</p>
+
+<!-- Score + Status + Actions -->
+<div class="grid">
+    <div>
+        <p>
+            <strong>Scholar Inbox Score:</strong>
+            {% if paper.scholar_inbox_score %}
+            <mark class="score-{{ 'high' if paper.scholar_inbox_score >= 90 else ('medium' if paper.scholar_inbox_score >= 70 else 'low') }}">
+                {{ "%.0f"|format(paper.scholar_inbox_score) }}
+            </mark>
+            {% else %}
+            <span>—</span>
+            {% endif %}
+        </p>
+    </div>
+    <div>
+        {% include "components/_status_section.html" %}
+    </div>
+</div>
+
+<!-- External Links -->
+<p>
+    {% if paper.url %}
+        <a href="{{ paper.url }}" target="_blank" rel="noopener">Scholar Inbox</a>
+    {% endif %}
+    {% if paper.id and not paper.id.startswith('title:') %}
+        {% if paper.url %}·{% endif %}
+        <a href="https://www.semanticscholar.org/paper/{{ paper.id }}" target="_blank" rel="noopener">Semantic Scholar</a>
+    {% endif %}
+    {% if paper.arxiv_id %}
+        · <a href="https://arxiv.org/abs/{{ paper.arxiv_id }}" target="_blank" rel="noopener">arXiv</a>
+    {% endif %}
+    {% if paper.doi %}
+        · <a href="https://doi.org/{{ paper.doi }}" target="_blank" rel="noopener">DOI</a>
+    {% endif %}
+</p>
+
+<hr>
+
+<!-- Two-column layout: chart + stats -->
+<div class="detail-layout">
+
+    <!-- Main content: chart + snapshots table -->
+    <div>
+        <h2>Citation History</h2>
+        {% include "components/_citation_chart.html" %}
+
+        <!-- Snapshots Table (collapsible) -->
+        <details>
+            <summary>Citation Snapshots ({{ snapshot_count }})</summary>
+            {% if snapshots %}
+            <div class="table-responsive">
+                <table>
+                    <thead>
+                        <tr>
+                            <th scope="col">Date</th>
+                            <th scope="col">Total Citations</th>
+                            <th scope="col">Source</th>
+                            <th scope="col">Yearly Breakdown</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for s in snapshots|reverse %}
+                        <tr>
+                            <td>{{ s.checked_at[:10] }}</td>
+                            <td>{{ s.total_citations }}</td>
+                            <td>{{ s.source|replace('_', ' ')|capitalize }}</td>
+                            <td>
+                                {% if s.yearly_breakdown %}
+                                    {% set breakdown = s.yearly_breakdown|from_json if s.yearly_breakdown is string else s.yearly_breakdown %}
+                                    {% if breakdown is mapping %}
+                                        {% for year, count in breakdown|dictsort %}
+                                            {{ year }}: {{ count }}{% if not loop.last %}, {% endif %}
+                                        {% endfor %}
+                                    {% else %}
+                                        —
+                                    {% endif %}
+                                {% else %}
+                                    —
+                                {% endif %}
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% else %}
+            <p>No citation snapshots recorded yet.</p>
+            {% endif %}
+        </details>
+    </div>
+
+    <!-- Stats Sidebar -->
+    <aside>
+        <h3>Stats</h3>
+        <dl>
+            <dt>Current Citations</dt>
+            <dd>{{ paper.citation_count }}</dd>
+
+            <dt>Velocity</dt>
+            <dd>{{ "%.1f"|format(paper.citation_velocity) }} /month</dd>
+
+            <dt>Published</dt>
+            <dd>{{ paper.published_date[:10] if paper.published_date else 'Unknown' }}</dd>
+
+            <dt>First Tracked</dt>
+            <dd>{{ paper.ingested_at[:10] }}</dd>
+
+            <dt>Last Checked</dt>
+            <dd>{{ paper.last_cited_check[:10] if paper.last_cited_check else 'Never' }}</dd>
+
+            <dt>Snapshots</dt>
+            <dd>{{ snapshot_count }}</dd>
+
+            <dt>Status</dt>
+            <dd>{% with status=paper.status %}{% include "components/_status_badge.html" %}{% endwith %}</dd>
+
+            {% if paper.abstract %}
+            <dt>Abstract</dt>
+            <dd><details><summary>Show abstract</summary>{{ paper.abstract }}</details></dd>
+            {% endif %}
+        </dl>
+    </aside>
+
+</div>
+
+{% endblock %}
+
+{% block extra_scripts %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.6/dist/chart.umd.min.js"></script>
+<script>
+(function() {
+    var snapshots = {{ snapshots_json | safe }};
+    var canvas = document.getElementById('citationChart');
+
+    if (!canvas || snapshots.length < 2) return;
+
+    var isDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+    var textColor = isDark ? '#e2e8f0' : '#334155';
+    var gridColor = isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.1)';
+    var lineColor = '#3b82f6';
+
+    new Chart(canvas, {
+        type: 'line',
+        data: {
+            labels: snapshots.map(function(s) { return s.date; }),
+            datasets: [{
+                label: 'Total Citations',
+                data: snapshots.map(function(s) { return s.total; }),
+                borderColor: lineColor,
+                backgroundColor: isDark ? 'rgba(59,130,246,0.2)' : 'rgba(59,130,246,0.1)',
+                fill: true,
+                tension: 0.3,
+                pointRadius: 4,
+                pointHoverRadius: 6
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                legend: { display: false },
+                tooltip: {
+                    callbacks: {
+                        title: function(items) { return items[0].label; },
+                        label: function(item) { return item.raw + ' citations'; }
+                    }
+                }
+            },
+            scales: {
+                x: {
+                    title: { display: true, text: 'Date', color: textColor },
+                    ticks: { color: textColor, maxRotation: 45 },
+                    grid: { color: gridColor }
+                },
+                y: {
+                    beginAtZero: true,
+                    title: { display: true, text: 'Total Citations', color: textColor },
+                    ticks: { color: textColor, precision: 0 },
+                    grid: { color: gridColor }
+                }
+            }
+        }
+    });
+})();
+</script>
+{% endblock %}

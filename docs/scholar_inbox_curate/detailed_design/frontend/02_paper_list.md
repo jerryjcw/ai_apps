@@ -69,24 +69,36 @@ async def paper_list(
 ### Backend Functions Used
 
 - `list_papers(conn, status, search, sort_by, sort_order, limit, offset)` from `src/db.py` — returns filtered, sorted, paginated paper rows.
-- `count_papers(conn, status, search)` — a new counting companion to `list_papers` that returns the total matching count (needed for pagination).
+- `count_papers(conn, status, search)` — counting companion to `list_papers` that returns the total matching count (needed for pagination). Searches across `title`, `authors`, and `abstract`.
 
 `count_papers` implementation:
 
 ```python
 def count_papers(conn, status: str | None = None, search: str | None = None) -> int:
-    """Count papers matching the given filters."""
-    query = "SELECT COUNT(*) FROM papers WHERE 1=1"
-    params = []
+    """Count papers matching the given filters.
 
-    if status:
-        query += " AND status = ?"
+    Used by the web UI for pagination. Mirrors the filter logic of list_papers().
+    """
+    conditions = []
+    params: list = []
+
+    if status is not None:
+        conditions.append("status = ?")
         params.append(status)
-    if search:
-        query += " AND (title LIKE ? OR authors LIKE ?)"
-        params.extend([f"%{search}%", f"%{search}%"])
 
-    return conn.execute(query, params).fetchone()[0]
+    if search is not None:
+        conditions.append("(title LIKE ? OR authors LIKE ? OR abstract LIKE ?)")
+        search_pattern = f"%{search}%"
+        params.extend([search_pattern, search_pattern, search_pattern])
+
+    where_clause = ""
+    if conditions:
+        where_clause = "WHERE " + " AND ".join(conditions)
+
+    row = conn.execute(
+        f"SELECT COUNT(*) as cnt FROM papers {where_clause}", params
+    ).fetchone()
+    return row["cnt"]
 ```
 
 ---
@@ -172,7 +184,7 @@ async def paper_rows_partial(
             <input type="search"
                    id="search-input"
                    name="q"
-                   placeholder="Search title or author..."
+                   placeholder="Search title, author, or abstract..."
                    value="{{ search_query }}"
                    hx-get="/partials/paper-rows"
                    hx-trigger="keyup changed delay:300ms"
@@ -246,6 +258,7 @@ async def paper_rows_partial(
                     </a>
                 </th>
                 <th scope="col">Status</th>
+                <th scope="col">Category</th>
                 <th scope="col" {% if sort_by == 'ingested_at' %}aria-sort="{{ 'ascending' if sort_order == 'asc' else 'descending' }}"{% endif %}>
                     <a href="#"
                        hx-get="/partials/paper-rows"
@@ -287,12 +300,13 @@ This partial renders the `<tbody>` and pagination. It's used both for initial pa
             <td>{{ paper.citation_count }}</td>
             <td>{{ "%.1f"|format(paper.citation_velocity) }} /mo</td>
             <td>{% with status=paper.status %}{% include "components/_status_badge.html" %}{% endwith %}</td>
+            <td>{{ paper.category or '—' }}</td>
             <td>{{ paper.ingested_at|relative_date }}</td>
         </tr>
         {% endfor %}
     {% else %}
         <tr>
-            <td colspan="8">
+            <td colspan="9">
                 {% if search_query or status_filter %}
                     No papers match your filters.
                 {% else %}
@@ -404,6 +418,7 @@ This partial renders the `<tbody>` and pagination. It's used both for initial pa
 | Citations | `citation_count` | desc | Yes |
 | Velocity | `citation_velocity` | desc (default sort) | Yes |
 | Status | — | — | No |
+| Category | — | — | No |
 | Ingested | `ingested_at` | desc | Yes |
 
 **Sort indicator:** `▲` for ascending, `▼` for descending, shown only on the active sort column.
@@ -436,8 +451,8 @@ if order not in ALLOWED_SORT_ORDERS:
 
 | Condition | Display |
 |-----------|---------|
-| No papers match filters | `<td colspan="8">No papers match your filters.</td>` |
-| No papers in database | `<td colspan="8">No papers tracked yet. Run an ingestion to get started.</td>` with link to settings |
+| No papers match filters | `<td colspan="9">No papers match your filters.</td>` |
+| No papers in database | `<td colspan="9">No papers tracked yet. Run an ingestion to get started.</td>` with link to settings |
 
 ---
 

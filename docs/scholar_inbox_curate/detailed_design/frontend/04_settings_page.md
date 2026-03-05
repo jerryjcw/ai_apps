@@ -57,7 +57,15 @@ async def settings(request: Request):
         <tbody>
             <tr>
                 <th scope="row">Score Threshold</th>
-                <td>{{ config.ingestion.score_threshold }}</td>
+                <td>{{ "%.0f%%"|format(config.ingestion.score_threshold * 100) }} ({{ config.ingestion.score_threshold }})</td>
+            </tr>
+            <tr>
+                <th scope="row">Backfill Score Threshold</th>
+                <td>{{ "%.0f%%"|format(config.ingestion.backfill_score_threshold * 100) }} ({{ config.ingestion.backfill_score_threshold }})</td>
+            </tr>
+            <tr>
+                <th scope="row">Backfill Lookback</th>
+                <td>{{ config.ingestion.backfill_lookback_days }} days</td>
             </tr>
             <tr>
                 <th scope="row">Schedule</th>
@@ -186,6 +194,38 @@ async def settings(request: Request):
                 <span aria-busy="true">Running...</span>
             </span>
             <div id="rules-result"></div>
+        </article>
+
+        <!-- Backfill -->
+        <article>
+            <header><strong>Backfill</strong></header>
+            <p>Scrape missed digest dates within the lookback window.</p>
+            <button hx-post="/partials/trigger-backfill"
+                    hx-target="#backfill-result"
+                    hx-indicator="#backfill-spinner"
+                    hx-disabled-elt="this">
+                Run Backfill
+            </button>
+            <span id="backfill-spinner" class="htmx-indicator" aria-hidden="true">
+                <span aria-busy="true">Running...</span>
+            </span>
+            <div id="backfill-result"></div>
+        </article>
+
+        <!-- Collect Citations -->
+        <article>
+            <header><strong>Collect Citations</strong></header>
+            <p>Collect citation data for papers that have never been polled.</p>
+            <button hx-post="/partials/trigger-collect"
+                    hx-target="#collect-result"
+                    hx-indicator="#collect-spinner"
+                    hx-disabled-elt="this">
+                Collect Citations
+            </button>
+            <span id="collect-spinner" class="htmx-indicator" aria-hidden="true">
+                <span aria-busy="true">Running...</span>
+            </span>
+            <div id="collect-result"></div>
         </article>
     </div>
 </section>
@@ -322,6 +362,49 @@ async def trigger_rules(request: Request):
         )
 ```
 
+### `POST /partials/trigger-backfill`
+
+```python
+@app.post("/partials/trigger-backfill")
+async def trigger_backfill(request: Request):
+    config = request.app.state.config
+
+    try:
+        from src.ingestion.backfill import run_backfill
+        result = await run_backfill(config)
+
+        return HTMLResponse(
+            f'<p class="trigger-success">Done. Backfilled {result.dates_processed} dates, '
+            f'ingested {result.papers_ingested} new papers.</p>'
+        )
+
+    except Exception as e:
+        return HTMLResponse(
+            f'<p class="trigger-error">Failed: {str(e)}</p>'
+        )
+```
+
+### `POST /partials/trigger-collect`
+
+```python
+@app.post("/partials/trigger-collect")
+async def trigger_collect(request: Request):
+    config = request.app.state.config
+
+    try:
+        from src.citations.poller import collect_citations
+        result = await collect_citations(config, config.db_path)
+
+        return HTMLResponse(
+            f'<p class="trigger-success">Done. Collected citations for {result} papers.</p>'
+        )
+
+    except Exception as e:
+        return HTMLResponse(
+            f'<p class="trigger-error">Failed: {str(e)}</p>'
+        )
+```
+
 ---
 
 ## Out-of-Band History Table Refresh
@@ -369,6 +452,8 @@ def _render_run_history_oob(request, templates, runs):
 | Ingestion | 30–60 seconds | Browser automation (Playwright) |
 | Citation Poll | 5–15 seconds | API calls (batched) |
 | Prune/Promote | < 1 second | Local DB queries only |
+| Backfill | 1–5 minutes | Iterates over missed dates |
+| Collect Citations | 5–30 seconds | API calls for unpolled papers |
 
 **HTMX waits for the response** — no timeout by default. During the wait:
 
@@ -386,7 +471,7 @@ The configuration section shows all values from `config.toml` grouped by categor
 
 | Group | Fields | Display Format |
 |-------|--------|----------------|
-| Ingestion | `score_threshold`, `schedule_cron` | Threshold as number, cron as `code` + human-readable |
+| Ingestion | `score_threshold`, `backfill_score_threshold`, `backfill_lookback_days`, `schedule_cron` | Threshold as percentage + decimal, days as number, cron as `code` + human-readable |
 | Citation Polling | `semantic_scholar_batch_size`, `poll_schedule_cron` | Same pattern |
 | Pruning | `min_age_months`, `min_citations`, `min_velocity` | Number + unit suffix |
 | Promotion | `citation_threshold`, `velocity_threshold` | Number + unit suffix |
