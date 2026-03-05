@@ -1,0 +1,123 @@
+{% extends "base.html" %}
+
+{% block title %}Papers — Scholar Inbox Curate{% endblock %}
+
+{% block content %}
+<h1>Papers</h1>
+
+<!-- Filters -->
+<form id="paper-filters" role="search">
+    <div class="grid">
+        <div>
+            <label for="status-filter">Status</label>
+            <select id="status-filter" name="status"
+                    hx-get="/partials/paper-rows"
+                    hx-trigger="change"
+                    hx-target="#paper-table-body"
+                    hx-include="#paper-filters"
+                    hx-push-url="true">
+                <option value="">All</option>
+                <option value="active" {% if status_filter == 'active' %}selected{% endif %}>Active</option>
+                <option value="promoted" {% if status_filter == 'promoted' %}selected{% endif %}>Promoted</option>
+                <option value="pruned" {% if status_filter == 'pruned' %}selected{% endif %}>Pruned</option>
+            </select>
+        </div>
+        <div>
+            <label for="search-input">Search</label>
+            <input type="search"
+                   id="search-input"
+                   name="q"
+                   placeholder="Search title, author, or abstract..."
+                   value="{{ search_query }}"
+                   hx-get="/partials/paper-rows"
+                   hx-trigger="keyup changed delay:300ms"
+                   hx-target="#paper-table-body"
+                   hx-include="#paper-filters"
+                   hx-push-url="true">
+        </div>
+    </div>
+
+    <!-- Hidden inputs to carry sort state across HTMX requests -->
+    <input type="hidden" name="sort" value="{{ sort_by }}">
+    <input type="hidden" name="order" value="{{ sort_order }}">
+    <input type="hidden" name="page" value="1">
+</form>
+
+<!-- Paper Table -->
+<div class="table-responsive">
+    <table>
+        <caption class="sr-only">Tracked papers</caption>
+        <thead>
+            <tr>
+                <th scope="col" {% if sort_by == 'title' %}aria-sort="{{ 'ascending' if sort_order == 'asc' else 'descending' }}"{% endif %}>
+                    <a href="#"
+                       hx-get="/partials/paper-rows"
+                       hx-vals='{"sort": "title", "order": "{{ 'asc' if sort_by == 'title' and sort_order == 'desc' else 'desc' }}", "page": "1"}'
+                       hx-target="#paper-table-body"
+                       hx-include="#paper-filters"
+                       hx-push-url="true">
+                        Title {% if sort_by == 'title' %}{{ '▲' if sort_order == 'asc' else '▼' }}{% endif %}
+                    </a>
+                </th>
+                <th scope="col">Authors</th>
+                <th scope="col" {% if sort_by == 'year' %}aria-sort="{{ 'ascending' if sort_order == 'asc' else 'descending' }}"{% endif %}>
+                    <a href="#"
+                       hx-get="/partials/paper-rows"
+                       hx-vals='{"sort": "year", "order": "{{ 'asc' if sort_by == 'year' and sort_order == 'desc' else 'desc' }}", "page": "1"}'
+                       hx-target="#paper-table-body"
+                       hx-include="#paper-filters"
+                       hx-push-url="true">
+                        Year {% if sort_by == 'year' %}{{ '▲' if sort_order == 'asc' else '▼' }}{% endif %}
+                    </a>
+                </th>
+                <th scope="col" {% if sort_by == 'scholar_inbox_score' %}aria-sort="{{ 'ascending' if sort_order == 'asc' else 'descending' }}"{% endif %}>
+                    <a href="#"
+                       hx-get="/partials/paper-rows"
+                       hx-vals='{"sort": "scholar_inbox_score", "order": "{{ 'asc' if sort_by == 'scholar_inbox_score' and sort_order == 'desc' else 'desc' }}", "page": "1"}'
+                       hx-target="#paper-table-body"
+                       hx-include="#paper-filters"
+                       hx-push-url="true">
+                        Score {% if sort_by == 'scholar_inbox_score' %}{{ '▲' if sort_order == 'asc' else '▼' }}{% endif %}
+                    </a>
+                </th>
+                <th scope="col" {% if sort_by == 'citation_count' %}aria-sort="{{ 'ascending' if sort_order == 'asc' else 'descending' }}"{% endif %}>
+                    <a href="#"
+                       hx-get="/partials/paper-rows"
+                       hx-vals='{"sort": "citation_count", "order": "{{ 'asc' if sort_by == 'citation_count' and sort_order == 'desc' else 'desc' }}", "page": "1"}'
+                       hx-target="#paper-table-body"
+                       hx-include="#paper-filters"
+                       hx-push-url="true">
+                        Citations {% if sort_by == 'citation_count' %}{{ '▲' if sort_order == 'asc' else '▼' }}{% endif %}
+                    </a>
+                </th>
+                <th scope="col" {% if sort_by == 'citation_velocity' %}aria-sort="{{ 'ascending' if sort_order == 'asc' else 'descending' }}"{% endif %}>
+                    <a href="#"
+                       hx-get="/partials/paper-rows"
+                       hx-vals='{"sort": "citation_velocity", "order": "{{ 'asc' if sort_by == 'citation_velocity' and sort_order == 'desc' else 'desc' }}", "page": "1"}'
+                       hx-target="#paper-table-body"
+                       hx-include="#paper-filters"
+                       hx-push-url="true">
+                        Velocity {% if sort_by == 'citation_velocity' %}{{ '▲' if sort_order == 'asc' else '▼' }}{% endif %}
+                    </a>
+                </th>
+                <th scope="col">Status</th>
+                <th scope="col">Category</th>
+                <th scope="col" {% if sort_by == 'ingested_at' %}aria-sort="{{ 'ascending' if sort_order == 'asc' else 'descending' }}"{% endif %}>
+                    <a href="#"
+                       hx-get="/partials/paper-rows"
+                       hx-vals='{"sort": "ingested_at", "order": "{{ 'asc' if sort_by == 'ingested_at' and sort_order == 'desc' else 'desc' }}", "page": "1"}'
+                       hx-target="#paper-table-body"
+                       hx-include="#paper-filters"
+                       hx-push-url="true">
+                        Ingested {% if sort_by == 'ingested_at' %}{{ '▲' if sort_order == 'asc' else '▼' }}{% endif %}
+                    </a>
+                </th>
+            </tr>
+        </thead>
+        <div id="paper-table-body">
+            {% include "papers/_rows.html" %}
+        </div>
+    </table>
+</div>
+
+{% endblock %}

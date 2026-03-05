@@ -1,0 +1,236 @@
+{% extends "base.html" %}
+
+{% block title %}Settings — Scholar Inbox Curate{% endblock %}
+
+{% block content %}
+<h1>Settings</h1>
+
+<!-- Section 1: Configuration -->
+<section>
+    <h2>Configuration</h2>
+    <p><small>Values loaded from <code>config.toml</code>. Edit the file and restart the server to change.</small></p>
+
+    <h3>Ingestion</h3>
+    <table>
+        <tbody>
+            <tr>
+                <th scope="row">Score Threshold</th>
+                <td>{{ "%.0f%%"|format(config.ingestion.score_threshold * 100) }} ({{ config.ingestion.score_threshold }})</td>
+            </tr>
+            <tr>
+                <th scope="row">Backfill Score Threshold</th>
+                <td>{{ "%.0f%%"|format(config.ingestion.backfill_score_threshold * 100) }} ({{ config.ingestion.backfill_score_threshold }})</td>
+            </tr>
+            <tr>
+                <th scope="row">Backfill Lookback</th>
+                <td>{{ config.ingestion.backfill_lookback_days }} days</td>
+            </tr>
+            <tr>
+                <th scope="row">Schedule</th>
+                <td>
+                    <code>{{ config.ingestion.schedule_cron }}</code>
+                    <small>({{ config.ingestion.schedule_cron|cron_human }})</small>
+                </td>
+            </tr>
+        </tbody>
+    </table>
+
+    <h3>Citation Polling</h3>
+    <table>
+        <tbody>
+            <tr>
+                <th scope="row">Batch Size</th>
+                <td>{{ config.citations.semantic_scholar_batch_size }}</td>
+            </tr>
+            <tr>
+                <th scope="row">Schedule</th>
+                <td>
+                    <code>{{ config.citations.poll_schedule_cron }}</code>
+                    <small>({{ config.citations.poll_schedule_cron|cron_human }})</small>
+                </td>
+            </tr>
+        </tbody>
+    </table>
+
+    <h3>Pruning Thresholds</h3>
+    <table>
+        <tbody>
+            <tr>
+                <th scope="row">Min Age</th>
+                <td>{{ config.pruning.min_age_months }} months</td>
+            </tr>
+            <tr>
+                <th scope="row">Min Citations</th>
+                <td>{{ config.pruning.min_citations }}</td>
+            </tr>
+            <tr>
+                <th scope="row">Min Velocity</th>
+                <td>{{ config.pruning.min_velocity }} /month</td>
+            </tr>
+        </tbody>
+    </table>
+
+    <h3>Promotion Thresholds</h3>
+    <table>
+        <tbody>
+            <tr>
+                <th scope="row">Citation Threshold</th>
+                <td>{{ config.promotion.citation_threshold }}</td>
+            </tr>
+            <tr>
+                <th scope="row">Velocity Threshold</th>
+                <td>{{ config.promotion.velocity_threshold }} /month (sustained)</td>
+            </tr>
+        </tbody>
+    </table>
+
+    <h3>Browser</h3>
+    <table>
+        <tbody>
+            <tr>
+                <th scope="row">Profile Directory</th>
+                <td><code>{{ config.browser.profile_dir }}</code></td>
+            </tr>
+            <tr>
+                <th scope="row">Headed Fallback</th>
+                <td>{{ 'Yes' if config.browser.headed_fallback else 'No' }}</td>
+            </tr>
+        </tbody>
+    </table>
+</section>
+
+<hr>
+
+<!-- Section 2: Manual Triggers -->
+<section>
+    <h2>Manual Triggers</h2>
+
+    <div class="grid">
+        <!-- Ingest -->
+        <article>
+            <header><strong>Paper Ingestion</strong></header>
+            <p>Scrape Scholar Inbox for new paper recommendations.</p>
+            <button hx-post="/partials/trigger-ingest"
+                    hx-target="#ingest-result"
+                    hx-indicator="#ingest-spinner"
+                    hx-disabled-elt="this">
+                Run Ingestion
+            </button>
+            <span id="ingest-spinner" class="htmx-indicator" aria-hidden="true">
+                <span aria-busy="true">Running...</span>
+            </span>
+            <div id="ingest-result"></div>
+        </article>
+
+        <!-- Poll Citations -->
+        <article>
+            <header><strong>Citation Polling</strong></header>
+            <p>Check citation counts for papers due for a poll.</p>
+            <button hx-post="/partials/trigger-poll"
+                    hx-target="#poll-result"
+                    hx-indicator="#poll-spinner"
+                    hx-disabled-elt="this">
+                Poll Citations
+            </button>
+            <span id="poll-spinner" class="htmx-indicator" aria-hidden="true">
+                <span aria-busy="true">Running...</span>
+            </span>
+            <div id="poll-result"></div>
+        </article>
+
+        <!-- Prune/Promote -->
+        <article>
+            <header><strong>Prune / Promote Rules</strong></header>
+            <p>Evaluate papers against prune/promote thresholds.</p>
+            <button hx-post="/partials/trigger-rules"
+                    hx-target="#rules-result"
+                    hx-indicator="#rules-spinner"
+                    hx-disabled-elt="this">
+                Run Rules
+            </button>
+            <span id="rules-spinner" class="htmx-indicator" aria-hidden="true">
+                <span aria-busy="true">Running...</span>
+            </span>
+            <div id="rules-result"></div>
+        </article>
+
+        <!-- Backfill -->
+        <article>
+            <header><strong>Backfill</strong></header>
+            <p>Scrape missed digest dates within the lookback window.</p>
+            <button hx-post="/partials/trigger-backfill"
+                    hx-target="#backfill-result"
+                    hx-indicator="#backfill-spinner"
+                    hx-disabled-elt="this">
+                Run Backfill
+            </button>
+            <span id="backfill-spinner" class="htmx-indicator" aria-hidden="true">
+                <span aria-busy="true">Running...</span>
+            </span>
+            <div id="backfill-result"></div>
+        </article>
+
+        <!-- Collect Citations -->
+        <article>
+            <header><strong>Collect Citations</strong></header>
+            <p>Collect citation data for papers that have never been polled.</p>
+            <button hx-post="/partials/trigger-collect"
+                    hx-target="#collect-result"
+                    hx-indicator="#collect-spinner"
+                    hx-disabled-elt="this">
+                Collect Citations
+            </button>
+            <span id="collect-spinner" class="htmx-indicator" aria-hidden="true">
+                <span aria-busy="true">Running...</span>
+            </span>
+            <div id="collect-result"></div>
+        </article>
+    </div>
+</section>
+
+<hr>
+
+<!-- Section 3: Ingestion Run History -->
+<section>
+    <h2>Ingestion History</h2>
+
+    {% if ingestion_runs %}
+    <div class="table-responsive">
+        <table>
+            <caption class="sr-only">Ingestion run history</caption>
+            <thead>
+                <tr>
+                    <th scope="col">Started</th>
+                    <th scope="col">Duration</th>
+                    <th scope="col">Papers Found</th>
+                    <th scope="col">Ingested</th>
+                    <th scope="col">Status</th>
+                </tr>
+            </thead>
+            <tbody id="run-history-body">
+                {% for run in ingestion_runs %}
+                <tr>
+                    <td>{{ run.started_at|relative_date }}</td>
+                    <td>{{ run.started_at|format_duration(run.finished_at) }}</td>
+                    <td>{{ run.papers_found }}</td>
+                    <td>{{ run.papers_ingested }}</td>
+                    <td>
+                        <span class="run-status-{{ run.status }}">{{ run.status|capitalize }}</span>
+                        {% if run.error_message %}
+                        <details>
+                            <summary><small>Error details</small></summary>
+                            <small><code>{{ run.error_message }}</code></small>
+                        </details>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <p>No ingestion runs recorded yet.</p>
+    {% endif %}
+</section>
+
+{% endblock %}

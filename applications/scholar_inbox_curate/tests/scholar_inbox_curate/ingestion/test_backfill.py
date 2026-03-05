@@ -144,7 +144,7 @@ class TestRunBackfill:
             mock_gc.return_value.__exit__ = MagicMock(return_value=False)
 
             with patch("src.ingestion.backfill.find_missing_dates") as mock_find:
-                mock_find.return_value = [date(2026, 2, 24), date(2026, 2, 25)]
+                mock_find.return_value = ["2026-02-24", "2026-02-25"]
 
                 result = await run_backfill(config)
 
@@ -167,7 +167,7 @@ class TestRunBackfill:
             mock_gc.return_value.__exit__ = MagicMock(return_value=False)
 
             with patch("src.ingestion.backfill.find_missing_dates") as mock_find:
-                mock_find.return_value = [date(2026, 2, 24)]
+                mock_find.return_value = ["2026-02-24"]
 
                 result = await run_backfill(config)
 
@@ -186,7 +186,7 @@ class TestRunBackfill:
             mock_gc.return_value.__exit__ = MagicMock(return_value=False)
 
             with patch("src.ingestion.backfill.find_missing_dates") as mock_find:
-                mock_find.return_value = [date(2026, 2, 24)]
+                mock_find.return_value = ["2026-02-24"]
 
                 await run_backfill(config)
 
@@ -204,7 +204,7 @@ class TestRunBackfill:
             mock_gc.return_value.__exit__ = MagicMock(return_value=False)
 
             with patch("src.ingestion.backfill.find_missing_dates") as mock_find:
-                mock_find.return_value = [date(2026, 2, 24)]
+                mock_find.return_value = ["2026-02-24"]
 
                 result = await run_backfill(config)
 
@@ -224,7 +224,7 @@ class TestRunBackfill:
             mock_gc.return_value.__exit__ = MagicMock(return_value=False)
 
             with patch("src.ingestion.backfill.find_missing_dates") as mock_find:
-                mock_find.return_value = [date(2026, 2, 24)]
+                mock_find.return_value = ["2026-02-24"]
 
                 await run_backfill(config)
 
@@ -245,7 +245,7 @@ class TestRunBackfill:
             mock_gc.return_value.__exit__ = MagicMock(return_value=False)
 
             with patch("src.ingestion.backfill.find_missing_dates") as mock_find:
-                mock_find.return_value = [date(2026, 2, 24)]
+                mock_find.return_value = ["2026-02-24"]
 
                 await run_backfill(config, lookback_days=5, score_threshold=0.80)
 
@@ -266,7 +266,7 @@ class TestRunBackfill:
 
             with patch("src.ingestion.backfill.find_missing_dates") as mock_find:
                 # Two dates, same paper
-                mock_find.return_value = [date(2026, 2, 24), date(2026, 2, 25)]
+                mock_find.return_value = ["2026-02-24", "2026-02-25"]
 
                 result = await run_backfill(config)
 

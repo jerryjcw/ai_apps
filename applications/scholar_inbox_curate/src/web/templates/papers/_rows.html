@@ -1,0 +1,82 @@
+<tbody>
+    {% if papers %}
+        {% for paper in papers %}
+        <tr>
+            <td class="title-cell">
+                <a href="/papers/{{ paper.id }}">{{ paper.title|truncate(80) }}</a>
+            </td>
+            <td>{{ paper.authors|first_author }}</td>
+            <td>{{ paper.year or '—' }}</td>
+            <td>{{ "%.0f"|format(paper.scholar_inbox_score) if paper.scholar_inbox_score else '—' }}</td>
+            <td>{{ paper.citation_count }}</td>
+            <td>{{ "%.1f"|format(paper.citation_velocity) }} /mo</td>
+            <td>{% with status=paper.status %}{% include "components/_status_badge.html" %}{% endwith %}</td>
+            <td>{{ paper.category or '—' }}</td>
+            <td>{{ paper.ingested_at|relative_date }}</td>
+        </tr>
+        {% endfor %}
+    {% else %}
+        <tr>
+            <td colspan="9">
+                {% if search_query or status_filter %}
+                    No papers match your filters.
+                {% else %}
+                    No papers tracked yet. <a href="/settings">Run an ingestion</a> to get started.
+                {% endif %}
+            </td>
+        </tr>
+    {% endif %}
+</tbody>
+
+<!-- Pagination -->
+{% if total_pages > 1 %}
+<nav aria-label="Pagination" style="margin-top: 1rem;">
+    <ul>
+        {% if current_page > 1 %}
+        <li>
+            <a href="#"
+               hx-get="/partials/paper-rows"
+               hx-vals='{"page": "{{ current_page - 1 }}"}'
+               hx-target="#paper-table-body"
+               hx-include="#paper-filters"
+               hx-push-url="true">
+                Previous
+            </a>
+        </li>
+        {% endif %}
+
+        {% for p in range(1, total_pages + 1) %}
+            {% if p == current_page %}
+            <li><a href="#" aria-current="page"><strong>{{ p }}</strong></a></li>
+            {% elif p <= 3 or p > total_pages - 2 or (p >= current_page - 1 and p <= current_page + 1) %}
+            <li>
+                <a href="#"
+                   hx-get="/partials/paper-rows"
+                   hx-vals='{"page": "{{ p }}"}'
+                   hx-target="#paper-table-body"
+                   hx-include="#paper-filters"
+                   hx-push-url="true">
+                    {{ p }}
+                </a>
+            </li>
+            {% elif p == 4 or p == total_pages - 2 %}
+            <li><span>...</span></li>
+            {% endif %}
+        {% endfor %}
+
+        {% if current_page < total_pages %}
+        <li>
+            <a href="#"
+               hx-get="/partials/paper-rows"
+               hx-vals='{"page": "{{ current_page + 1 }}"}'
+               hx-target="#paper-table-body"
+               hx-include="#paper-filters"
+               hx-push-url="true">
+                Next
+            </a>
+        </li>
+        {% endif %}
+    </ul>
+    <small>Page {{ current_page }} of {{ total_pages }} ({{ total_count }} papers)</small>
+</nav>
+{% endif %}
