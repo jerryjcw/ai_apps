@@ -1,0 +1,59 @@
+# Scholar Inbox Curate Configuration
+#
+# This file contains application settings for Scholar Inbox Curate.
+# Secrets (credentials, API keys) should be set in .env file instead.
+
+[database]
+# Path to the SQLite database file (created automatically if it doesn't exist)
+path = "data/scholar_curate.db"
+
+[ingestion]
+# Score threshold for paper ingestion (0.0-1.0 decimal scale)
+# API ranking_score ranges from 0.0 to 1.0 (Scholar Inbox UI displays as 0-100)
+# Papers below this threshold are not ingested
+score_threshold = 0.60
+
+# Cron expression for regular ingestion schedule (5 fields: minute hour day month day_of_week)
+# Example: "0 8 * * 1" = every Monday at 8:00 AM
+schedule_cron = "0 8 * * 1"
+
+# Backfill configuration (used by the "backfill" command to catch up on missed dates)
+backfill_score_threshold = 0.60    # Score threshold for backfill runs (0.0-1.0 scale)
+backfill_lookback_days = 30        # How many days back to search for gaps
+
+[citations]
+# Batch size for Semantic Scholar API requests (1-500)
+# Larger batches are faster but use more memory
+semantic_scholar_batch_size = 100
+
+# Cron expression for citation polling schedule
+# Example: "0 6 * * 3" = every Wednesday at 6:00 AM
+poll_schedule_cron = "0 6 * * 3"
+
+[pruning]
+# Papers are pruned (hidden) when ALL conditions are met:
+# - Age since publication > min_age_months
+# - Total citations < min_citations
+# - Citation velocity < min_velocity
+#
+# Pruned papers no longer appear in default views and are not polled for citations.
+
+min_age_months = 6                 # Don't prune papers younger than this
+min_citations = 10                 # Papers with fewer citations after min_age are pruned
+min_velocity = 0.0                 # Papers with lower velocity (citations/month) are pruned
+
+[promotion]
+# Papers are promoted (highlighted) when ANY condition is met:
+# - Total citations >= citation_threshold
+# - Citation velocity >= velocity_threshold (sustained over 2+ consecutive polling cycles)
+#
+# Promoted papers are highlighted in the UI and continue to be polled monthly.
+
+citation_threshold = 25            # Papers with this many citations are promoted
+velocity_threshold = 10.0          # Papers with this velocity (citations/month) are promoted
+
+[browser]
+# Playwright browser configuration (used for Scholar Inbox login with Cloudflare Turnstile)
+
+profile_dir = "data/browser_profile"  # Directory to store browser profile for login
+headed_fallback = true               # Use headed mode when manual login is needed
