@@ -51,6 +51,7 @@ CREATE TABLE IF NOT EXISTS papers (
     url                 TEXT,                -- Scholar Inbox URL or DOI link
     arxiv_id            TEXT,
     doi                 TEXT,                -- DOI identifier (from Semantic Scholar)
+    category            TEXT,                -- Scholar Inbox topic category
     venue               TEXT,
     year                INTEGER,
     published_date      TEXT,                -- ISO 8601, actual publication/preprint date
@@ -174,9 +175,11 @@ def _run_migrations(conn, current_version: int):
 
 This allows adding columns or tables in the future without requiring users to recreate their database.
 
-**Current Schema Version: 2**
+**Current Schema Version: 4**
 - V1: Initial schema with papers, citation_snapshots, ingestion_runs
 - V2: Adds scraped_dates table with run_id/papers_found columns for backfill audit trail
+- V3: Adds `doi` column to papers table
+- V4: Adds `category` column to papers table (Scholar Inbox topic category)
 
 ### V1 → V2 Migration
 
@@ -243,6 +246,13 @@ def get_papers_due_for_poll(conn, now: str) -> list[dict]:
     - age 3-12 months AND last check > 14 days ago → include
     - age > 12 months AND last check > 30 days ago → include
     - status='promoted' AND last check > 30 days ago → include
+    """
+
+def get_papers_never_polled(conn) -> list[dict]:
+    """Return papers that have never had citation data collected.
+
+    Selects papers where last_cited_check IS NULL and status != 'pruned'.
+    Used by the collect-citations command to target backfilled papers.
     """
 
 def get_paper_count_by_status(conn) -> dict[str, int]:

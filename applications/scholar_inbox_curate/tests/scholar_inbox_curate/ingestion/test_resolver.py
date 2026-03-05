@@ -549,3 +549,55 @@ class TestRateLimitingAndErrors:
         call_kwargs = client.get.call_args_list[0]
         headers = call_kwargs.kwargs.get("headers") or call_kwargs[1].get("headers", {})
         assert "x-api-key" not in headers
+
+
+# ---------------------------------------------------------------------------
+# Category pass-through
+# ---------------------------------------------------------------------------
+
+class TestCategoryPassThrough:
+    def test_parse_s2_response_carries_category(self):
+        raw = RawPaper(
+            title="Test Paper",
+            authors=["Alice"],
+            abstract="Abstract",
+            score=0.9,
+            category="Computer Vision and Graphics",
+        )
+        data = _s2_paper_response()
+        resolved = _parse_s2_response(data, raw)
+        assert resolved.category == "Computer Vision and Graphics"
+
+    def test_parse_s2_response_none_category(self):
+        raw = RawPaper(
+            title="Test Paper",
+            authors=["Alice"],
+            abstract="Abstract",
+            score=0.9,
+        )
+        data = _s2_paper_response()
+        resolved = _parse_s2_response(data, raw)
+        assert resolved.category is None
+
+    def test_fallback_resolved_carries_category(self):
+        raw = RawPaper(
+            title="Fallback Paper",
+            authors=["Bob"],
+            abstract="Abstract",
+            score=0.8,
+            category="Natural Language Processing",
+        )
+        resolved = _create_fallback_resolved(raw)
+        assert resolved.category == "Natural Language Processing"
+
+    def test_pre_resolved_carries_category(self):
+        raw = RawPaper(
+            title="Pre-Resolved",
+            authors=["Charlie"],
+            abstract="Abstract",
+            score=0.85,
+            semantic_scholar_id="s2_id",
+            category="Machine Learning",
+        )
+        resolved = _create_pre_resolved(raw)
+        assert resolved.category == "Machine Learning"

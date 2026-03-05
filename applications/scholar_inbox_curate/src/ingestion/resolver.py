@@ -48,6 +48,7 @@ class ResolvedPaper:
     citation_count: int
     scholar_inbox_score: float
     scholar_inbox_url: str | None
+    category: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -149,6 +150,7 @@ def _parse_s2_response(data: dict, raw: RawPaper) -> ResolvedPaper:
         citation_count=data.get("citationCount", 0),
         scholar_inbox_score=raw.score,
         scholar_inbox_url=raw.scholar_inbox_url,
+        category=raw.category,
     )
 
 
@@ -188,6 +190,7 @@ def _create_fallback_resolved(raw: RawPaper) -> ResolvedPaper:
         citation_count=0,
         scholar_inbox_score=raw.score,
         scholar_inbox_url=raw.scholar_inbox_url,
+        category=raw.category,
     )
 
 
@@ -212,6 +215,7 @@ def _create_pre_resolved(raw: RawPaper) -> ResolvedPaper:
         citation_count=0,
         scholar_inbox_score=raw.score,
         scholar_inbox_url=raw.scholar_inbox_url,
+        category=raw.category,
     )
 
 
@@ -243,6 +247,7 @@ def paper_to_dict(paper: ResolvedPaper) -> dict:
         "published_date": paper.published_date,
         "scholar_inbox_score": paper.scholar_inbox_score,
         "scholar_inbox_url": paper.scholar_inbox_url,
+        "category": paper.category,
         "citation_count": paper.citation_count,
         "ingested_at": datetime.now(timezone.utc).isoformat(),
         "status": "active",

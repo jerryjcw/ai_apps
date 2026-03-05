@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 import sqlite3
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 
 from src.config import AppConfig
 from src.db import update_paper_status
@@ -33,6 +33,11 @@ def _paper_age_months(paper: dict, now: str) -> float:
     published = paper.get("published_date") or paper["ingested_at"]
     dt_published = datetime.fromisoformat(published)
     dt_now = datetime.fromisoformat(now)
+    # Normalize both to UTC-aware to avoid naive vs aware subtraction errors
+    if dt_published.tzinfo is None:
+        dt_published = dt_published.replace(tzinfo=timezone.utc)
+    if dt_now.tzinfo is None:
+        dt_now = dt_now.replace(tzinfo=timezone.utc)
     return (dt_now - dt_published).total_seconds() / (30.44 * 86400)
 
 

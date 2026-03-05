@@ -1,0 +1,26 @@
+# E2E test config — scrape_test
+[database]
+path = "e2e/scrape_test/test.db"
+
+[ingestion]
+score_threshold = 0.60
+schedule_cron = "0 8 * * 1"
+backfill_score_threshold = 0.60
+backfill_lookback_days = 30
+
+[citations]
+semantic_scholar_batch_size = 100
+poll_schedule_cron = "0 6 * * 3"
+
+[pruning]
+min_age_months = 6
+min_citations = 10
+min_velocity = 0.0
+
+[promotion]
+citation_threshold = 25
+velocity_threshold = 10.0
+
+[browser]
+profile_dir = "e2e/scrape_test/browser_profile"
+headed_fallback = true

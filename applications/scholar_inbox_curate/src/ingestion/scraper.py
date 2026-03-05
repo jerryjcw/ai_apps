@@ -166,8 +166,62 @@ async def manual_login(config) -> list[dict]:
     return cookie_dicts
 
 
+async def extract_chrome_session(config) -> str:
+    """Extract session cookie from Chrome and save to cookies.json.
+
+    Uses browser_cookie3 to read Chrome's cookie store, verifies the
+    cookie is valid, and persists it for future use.
+    Raises LoginError if no valid cookie found.
+    """
+    try:
+        import browser_cookie3
+    except ImportError as exc:
+        raise LoginError(
+            "browser_cookie3 is not installed. "
+            "Install it with: pip install browser-cookie3"
+        ) from exc
+
+    try:
+        cj = browser_cookie3.chrome(domain_name="api.scholar-inbox.com")
+    except Exception as exc:
+        raise LoginError(f"Failed to read Chrome cookies: {exc}") from exc
+
+    session_value = None
+    for c in cj:
+        if c.name == "session":
+            session_value = c.value
+            break
+
+    if not session_value:
+        raise LoginError(
+            "No 'session' cookie found in Chrome for api.scholar-inbox.com. "
+            "Make sure you are logged into Scholar Inbox in Chrome."
+        )
+
+    # Verify the cookie is still valid
+    async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT) as client:
+        if not await verify_session(client, session_value):
+            raise LoginError(
+                "Chrome session cookie found but it has expired. "
+                "Please log into Scholar Inbox in Chrome again."
+            )
+
+    # Persist the cookie
+    data_dir = str(Path(config.db_path).parent)
+    cookie_dicts = [
+        {"name": "session", "value": session_value, "domain": "api.scholar-inbox.com"}
+    ]
+    save_cookies(cookie_dicts, data_dir)
+    logger.info("Extracted and saved valid session cookie from Chrome")
+
+    return session_value
+
+
 async def ensure_session(config) -> str:
-    """Return a valid session cookie, re-authenticating if necessary."""
+    """Return a valid session cookie, re-authenticating if necessary.
+
+    Fallback order: saved cookies → Chrome extraction → Playwright manual login.
+    """
     data_dir = str(Path(config.db_path).parent)
     cookie = load_session_cookie(data_dir)
 
@@ -176,7 +230,13 @@ async def ensure_session(config) -> str:
             if await verify_session(client, cookie):
                 logger.debug("Existing session cookie is valid")
                 return cookie
-        logger.info("Session cookie expired, re-authenticating...")
+        logger.info("Session cookie expired, trying Chrome extraction...")
+
+    # Try Chrome cookie extraction before falling back to Playwright
+    try:
+        return await extract_chrome_session(config)
+    except LoginError as exc:
+        logger.info("Chrome extraction failed (%s), falling back to manual login...", exc)
 
     cookies = await manual_login(config)
     session = _extract_session_cookie(cookies)

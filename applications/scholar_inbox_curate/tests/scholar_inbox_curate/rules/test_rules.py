@@ -100,6 +100,24 @@ class TestPaperAgeMonths:
         age = _paper_age_months(paper, "2025-01-01T00:00:00+00:00")
         assert 5.5 < age < 6.5
 
+    def test_mixed_timezone_awareness(self):
+        """Naive published_date with aware now should not raise TypeError."""
+        paper = {
+            "published_date": "2024-06-01T00:00:00",  # naive
+            "ingested_at": "2024-07-01T00:00:00+00:00",
+        }
+        age = _paper_age_months(paper, "2025-01-01T00:00:00+00:00")  # aware
+        assert age > 6.5
+
+    def test_both_naive(self):
+        """Both naive datetimes should work correctly."""
+        paper = {
+            "published_date": "2024-06-01T00:00:00",
+            "ingested_at": "2024-07-01T00:00:00",
+        }
+        age = _paper_age_months(paper, "2025-01-01T00:00:00")
+        assert age > 6.5
+
 
 # ---------------------------------------------------------------------------
 # _should_prune

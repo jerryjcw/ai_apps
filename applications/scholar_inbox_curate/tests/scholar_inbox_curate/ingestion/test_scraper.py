@@ -20,6 +20,8 @@ from src.ingestion.scraper import (
     _extract_year,
     _fetch_papers,
     _parse_papers,
+    ensure_session,
+    extract_chrome_session,
     load_session_cookie,
     save_cookies,
     scrape_date,
@@ -632,3 +634,166 @@ class TestExceptionHierarchy:
 
     def test_api_error(self):
         assert issubclass(APIError, ScraperError)
+
+
+# ===================================================================
+# TestExtractChromeSession
+# ===================================================================
+
+
+class TestExtractChromeSession:
+    def _make_config(self, tmp_path):
+        config = MagicMock()
+        config.db_path = str(tmp_path / "data" / "test.db")
+        return config
+
+    def _mock_bc3(self, cookies):
+        """Create a mock browser_cookie3 module with given cookies."""
+        mock_module = MagicMock()
+        mock_module.chrome.return_value = cookies
+        return mock_module
+
+    @pytest.mark.asyncio
+    @patch("src.ingestion.scraper.verify_session", new_callable=AsyncMock)
+    async def test_success(self, mock_verify, tmp_path):
+        """Extract valid cookie from Chrome, verify, and save."""
+        cookie = MagicMock()
+        cookie.name = "session"
+        cookie.value = "chrome_sess_123"
+        mock_bc3 = self._mock_bc3([cookie])
+        mock_verify.return_value = True
+
+        config = self._make_config(tmp_path)
+        with patch.dict("sys.modules", {"browser_cookie3": mock_bc3}):
+            result = await extract_chrome_session(config)
+
+        assert result == "chrome_sess_123"
+        mock_bc3.chrome.assert_called_once_with(domain_name="api.scholar-inbox.com")
+        # Cookie should be saved to disk
+        cookies_path = tmp_path / "data" / "cookies.json"
+        assert cookies_path.exists()
+        saved = json.loads(cookies_path.read_text())
+        assert saved[0]["name"] == "session"
+        assert saved[0]["value"] == "chrome_sess_123"
+
+    @pytest.mark.asyncio
+    async def test_no_session_cookie_in_chrome(self, tmp_path):
+        """Raise LoginError when Chrome has no session cookie."""
+        other_cookie = MagicMock()
+        other_cookie.name = "csrf_token"
+        other_cookie.value = "xyz"
+        mock_bc3 = self._mock_bc3([other_cookie])
+
+        config = self._make_config(tmp_path)
+        with patch.dict("sys.modules", {"browser_cookie3": mock_bc3}):
+            with pytest.raises(LoginError, match="No 'session' cookie found"):
+                await extract_chrome_session(config)
+
+    @pytest.mark.asyncio
+    async def test_empty_cookie_jar(self, tmp_path):
+        """Raise LoginError when Chrome cookie jar is empty."""
+        mock_bc3 = self._mock_bc3([])
+
+        config = self._make_config(tmp_path)
+        with patch.dict("sys.modules", {"browser_cookie3": mock_bc3}):
+            with pytest.raises(LoginError, match="No 'session' cookie found"):
+                await extract_chrome_session(config)
+
+    @pytest.mark.asyncio
+    @patch("src.ingestion.scraper.verify_session", new_callable=AsyncMock)
+    async def test_expired_cookie(self, mock_verify, tmp_path):
+        """Raise LoginError when Chrome cookie exists but is expired."""
+        cookie = MagicMock()
+        cookie.name = "session"
+        cookie.value = "expired_sess"
+        mock_bc3 = self._mock_bc3([cookie])
+        mock_verify.return_value = False
+
+        config = self._make_config(tmp_path)
+        with patch.dict("sys.modules", {"browser_cookie3": mock_bc3}):
+            with pytest.raises(LoginError, match="expired"):
+                await extract_chrome_session(config)
+
+    @pytest.mark.asyncio
+    async def test_chrome_read_failure(self, tmp_path):
+        """Raise LoginError when browser_cookie3 cannot read Chrome cookies."""
+        mock_bc3 = MagicMock()
+        mock_bc3.chrome.side_effect = PermissionError("Chrome is locked")
+
+        config = self._make_config(tmp_path)
+        with patch.dict("sys.modules", {"browser_cookie3": mock_bc3}):
+            with pytest.raises(LoginError, match="Failed to read Chrome cookies"):
+                await extract_chrome_session(config)
+
+    @pytest.mark.asyncio
+    async def test_browser_cookie3_not_installed(self, tmp_path):
+        """Raise LoginError when browser_cookie3 is not importable."""
+        config = self._make_config(tmp_path)
+        with patch.dict("sys.modules", {"browser_cookie3": None}):
+            with pytest.raises(LoginError, match="browser_cookie3 is not installed"):
+                await extract_chrome_session(config)
+
+
+# ===================================================================
+# TestEnsureSession
+# ===================================================================
+
+
+class TestEnsureSession:
+    def _make_config(self, tmp_path):
+        config = MagicMock()
+        config.db_path = str(tmp_path / "data" / "test.db")
+        config.secrets.scholar_inbox_email = "test@test.com"
+        config.secrets.scholar_inbox_password = "pass"
+        return config
+
+    @pytest.mark.asyncio
+    @patch("src.ingestion.scraper.load_session_cookie")
+    @patch("src.ingestion.scraper.verify_session", new_callable=AsyncMock)
+    async def test_uses_saved_cookie_when_valid(self, mock_verify, mock_load, tmp_path):
+        mock_load.return_value = "saved_cookie"
+        mock_verify.return_value = True
+
+        config = self._make_config(tmp_path)
+        result = await ensure_session(config)
+
+        assert result == "saved_cookie"
+
+    @pytest.mark.asyncio
+    @patch("src.ingestion.scraper.manual_login", new_callable=AsyncMock)
+    @patch("src.ingestion.scraper.extract_chrome_session", new_callable=AsyncMock)
+    @patch("src.ingestion.scraper.verify_session", new_callable=AsyncMock)
+    @patch("src.ingestion.scraper.load_session_cookie")
+    async def test_tries_chrome_when_saved_expired(
+        self, mock_load, mock_verify, mock_chrome, mock_login, tmp_path
+    ):
+        mock_load.return_value = "old_cookie"
+        mock_verify.return_value = False
+        mock_chrome.return_value = "chrome_cookie"
+
+        config = self._make_config(tmp_path)
+        result = await ensure_session(config)
+
+        assert result == "chrome_cookie"
+        mock_chrome.assert_awaited_once()
+        mock_login.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    @patch("src.ingestion.scraper.manual_login", new_callable=AsyncMock)
+    @patch("src.ingestion.scraper.extract_chrome_session", new_callable=AsyncMock)
+    @patch("src.ingestion.scraper.load_session_cookie")
+    async def test_falls_back_to_playwright_when_chrome_fails(
+        self, mock_load, mock_chrome, mock_login, tmp_path
+    ):
+        mock_load.return_value = None
+        mock_chrome.side_effect = LoginError("no cookie in Chrome")
+        mock_login.return_value = [
+            {"name": "session", "value": "pw_cookie", "domain": "api.scholar-inbox.com"}
+        ]
+
+        config = self._make_config(tmp_path)
+        result = await ensure_session(config)
+
+        assert result == "pw_cookie"
+        mock_chrome.assert_awaited_once()
+        mock_login.assert_awaited_once()

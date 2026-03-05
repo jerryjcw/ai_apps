@@ -44,6 +44,7 @@ def _resolved_to_db_dict(paper: ResolvedPaper) -> dict:
         "year": paper.year,
         "published_date": paper.published_date,
         "scholar_inbox_score": paper.scholar_inbox_score,
+        "category": paper.category,
         "citation_count": paper.citation_count,
         "ingested_at": datetime.now().isoformat(),
         "status": "active",

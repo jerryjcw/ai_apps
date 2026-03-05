@@ -68,6 +68,17 @@ def poll_citations(ctx: click.Context) -> None:
     click.echo(f"Citation poll complete: {count} papers processed")
 
 
+@cli.command("collect-citations")
+@click.pass_context
+def collect_citations(ctx: click.Context) -> None:
+    """Collect citation data for papers that have never been polled."""
+    from src.citations.poller import collect_citations_for_unpolled
+
+    config: AppConfig = ctx.obj["config"]
+    count = asyncio.run(collect_citations_for_unpolled(config, config.db_path))
+    click.echo(f"Citation collection complete: {count} unpolled papers processed")
+
+
 @cli.command()
 @click.option(
     "--dry-run", is_flag=True, help="Show what would happen without making changes"
@@ -198,6 +209,20 @@ def run(ctx: click.Context, with_web: bool, port: int) -> None:
     from src.scheduler import start_scheduler
 
     start_scheduler(config)
+
+
+@cli.command("grab-session")
+@click.pass_context
+def grab_session(ctx: click.Context) -> None:
+    """Extract session cookie from Chrome browser."""
+    from src.ingestion.scraper import extract_chrome_session
+
+    config: AppConfig = ctx.obj["config"]
+    try:
+        asyncio.run(extract_chrome_session(config))
+        click.echo("Session cookie extracted from Chrome and saved.")
+    except Exception as exc:
+        raise click.ClickException(str(exc))
 
 
 @cli.command()

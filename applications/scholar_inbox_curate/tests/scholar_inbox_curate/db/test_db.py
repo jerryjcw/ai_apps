@@ -19,6 +19,7 @@ from src.db import (
     update_paper_status,
     update_paper_citations,
     get_papers_due_for_poll,
+    get_papers_never_polled,
     get_paper_count_by_status,
     count_papers,
     paper_exists,
@@ -34,6 +35,7 @@ from src.db import (
     find_missing_dates,
     _migrate_v1_to_v2,
     _migrate_v2_to_v3,
+    _migrate_v3_to_v4,
     CURRENT_SCHEMA_VERSION,
 )
 
@@ -410,6 +412,47 @@ class TestGetPapersDueForPoll:
         )
         result = get_papers_due_for_poll(db_conn, "2026-02-26T00:00:00+00:00")
         assert len(result) == 1
+
+
+class TestGetPapersNeverPolled:
+    def test_empty_db(self, db_conn):
+        assert get_papers_never_polled(db_conn) == []
+
+    def test_never_polled_paper_included(self, db_conn):
+        upsert_paper(db_conn, _make_paper("p1", "Paper 1"))
+        result = get_papers_never_polled(db_conn)
+        assert len(result) == 1
+        assert result[0]["id"] == "p1"
+
+    def test_polled_paper_excluded(self, db_conn):
+        upsert_paper(db_conn, _make_paper("p1", "Paper 1"))
+        update_paper_citations(db_conn, "p1", 10, 1.5)
+        result = get_papers_never_polled(db_conn)
+        assert len(result) == 0
+
+    def test_pruned_paper_excluded(self, db_conn):
+        upsert_paper(db_conn, _make_paper("p1", "Paper 1"))
+        update_paper_status(db_conn, "p1", "pruned")
+        result = get_papers_never_polled(db_conn)
+        assert len(result) == 0
+
+    def test_mix_of_polled_and_unpolled(self, db_conn):
+        upsert_paper(db_conn, _make_paper("p1", "Never Polled"))
+        upsert_paper(db_conn, _make_paper("p2", "Already Polled"))
+        upsert_paper(db_conn, _make_paper("p3", "Also Never Polled"))
+        upsert_paper(db_conn, _make_paper("p4", "Pruned Unpolled"))
+        update_paper_citations(db_conn, "p2", 5, 0.5)
+        update_paper_status(db_conn, "p4", "pruned")
+        result = get_papers_never_polled(db_conn)
+        ids = {r["id"] for r in result}
+        assert ids == {"p1", "p3"}
+
+    def test_promoted_unpolled_paper_included(self, db_conn):
+        upsert_paper(db_conn, _make_paper("p1", "Promoted"))
+        update_paper_status(db_conn, "p1", "promoted")
+        result = get_papers_never_polled(db_conn)
+        assert len(result) == 1
+        assert result[0]["id"] == "p1"
 
 
 class TestPaperCountByStatus:
@@ -972,3 +1015,192 @@ class TestDoiColumn:
         upsert_paper(db_conn, paper)
         fetched = get_paper(db_conn, "abc123")
         assert fetched["doi"] == "10.5555/new.doi"
+
+
+class TestMigrationV3ToV4:
+    def test_migrate_adds_category_column(self):
+        """Simulate a V3 database and migrate to V4."""
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys=ON")
+
+        # Create V3 schema (without category)
+        v3_schema = """\
+CREATE TABLE IF NOT EXISTS papers (
+    id TEXT PRIMARY KEY,
+    title TEXT NOT NULL,
+    authors TEXT,
+    abstract TEXT,
+    url TEXT,
+    arxiv_id TEXT,
+    doi TEXT,
+    venue TEXT,
+    year INTEGER,
+    published_date TEXT,
+    scholar_inbox_score REAL,
+    status TEXT NOT NULL DEFAULT 'active'
+        CHECK(status IN ('active', 'promoted', 'pruned')),
+    manual_status INTEGER NOT NULL DEFAULT 0,
+    ingested_at TEXT NOT NULL,
+    last_cited_check TEXT,
+    citation_count INTEGER NOT NULL DEFAULT 0,
+    citation_velocity REAL NOT NULL DEFAULT 0.0
+);
+CREATE TABLE IF NOT EXISTS citation_snapshots (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    paper_id TEXT NOT NULL REFERENCES papers(id) ON DELETE CASCADE,
+    checked_at TEXT NOT NULL,
+    total_citations INTEGER NOT NULL,
+    yearly_breakdown TEXT,
+    source TEXT NOT NULL CHECK(source IN ('semantic_scholar', 'openalex'))
+);
+CREATE TABLE IF NOT EXISTS ingestion_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    started_at TEXT NOT NULL,
+    finished_at TEXT,
+    papers_found INTEGER NOT NULL DEFAULT 0,
+    papers_ingested INTEGER NOT NULL DEFAULT 0,
+    status TEXT NOT NULL DEFAULT 'running'
+        CHECK(status IN ('running', 'completed', 'failed')),
+    error_message TEXT,
+    digest_date TEXT
+);
+CREATE TABLE IF NOT EXISTS scraped_dates (
+    digest_date TEXT PRIMARY KEY,
+    scraped_at TEXT NOT NULL,
+    run_id INTEGER REFERENCES ingestion_runs(id),
+    papers_found INTEGER NOT NULL DEFAULT 0
+);
+"""
+        conn.executescript(v3_schema)
+        conn.execute("PRAGMA user_version = 3")
+
+        # Run migration
+        _migrate_v3_to_v4(conn)
+        conn.execute("PRAGMA user_version = 4")
+
+        # Verify category column exists
+        cols = conn.execute("PRAGMA table_info(papers)").fetchall()
+        col_names = [c["name"] for c in cols]
+        assert "category" in col_names
+
+        # Verify we can insert a paper with category
+        conn.execute(
+            "INSERT INTO papers (id, title, ingested_at, category) VALUES (?, ?, ?, ?)",
+            ("test1", "Test", "2026-01-01T00:00:00Z", "Computer Vision and Graphics"),
+        )
+        row = conn.execute("SELECT category FROM papers WHERE id = 'test1'").fetchone()
+        assert row["category"] == "Computer Vision and Graphics"
+
+        conn.close()
+
+    def test_migrate_idempotent(self):
+        """Running V3→V4 migration twice should not fail."""
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys=ON")
+
+        conn.execute("""\
+            CREATE TABLE papers (
+                id TEXT PRIMARY KEY, title TEXT NOT NULL, ingested_at TEXT NOT NULL,
+                category TEXT
+            )
+        """)
+        conn.execute("PRAGMA user_version = 3")
+
+        # Should not raise
+        _migrate_v3_to_v4(conn)
+        _migrate_v3_to_v4(conn)
+
+        conn.close()
+
+    def test_full_init_on_v3_db_runs_migration(self):
+        """init_db_on_conn should detect V3 and run migration to V4."""
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys=ON")
+
+        # Simulate V3 state
+        v3_schema = """\
+CREATE TABLE IF NOT EXISTS papers (
+    id TEXT PRIMARY KEY,
+    title TEXT NOT NULL,
+    authors TEXT,
+    abstract TEXT,
+    url TEXT,
+    arxiv_id TEXT,
+    doi TEXT,
+    venue TEXT,
+    year INTEGER,
+    published_date TEXT,
+    scholar_inbox_score REAL,
+    status TEXT NOT NULL DEFAULT 'active'
+        CHECK(status IN ('active', 'promoted', 'pruned')),
+    manual_status INTEGER NOT NULL DEFAULT 0,
+    ingested_at TEXT NOT NULL,
+    last_cited_check TEXT,
+    citation_count INTEGER NOT NULL DEFAULT 0,
+    citation_velocity REAL NOT NULL DEFAULT 0.0
+);
+CREATE TABLE IF NOT EXISTS citation_snapshots (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    paper_id TEXT NOT NULL REFERENCES papers(id) ON DELETE CASCADE,
+    checked_at TEXT NOT NULL,
+    total_citations INTEGER NOT NULL,
+    yearly_breakdown TEXT,
+    source TEXT NOT NULL CHECK(source IN ('semantic_scholar', 'openalex'))
+);
+CREATE TABLE IF NOT EXISTS ingestion_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    started_at TEXT NOT NULL,
+    finished_at TEXT,
+    papers_found INTEGER NOT NULL DEFAULT 0,
+    papers_ingested INTEGER NOT NULL DEFAULT 0,
+    status TEXT NOT NULL DEFAULT 'running'
+        CHECK(status IN ('running', 'completed', 'failed')),
+    error_message TEXT,
+    digest_date TEXT
+);
+CREATE TABLE IF NOT EXISTS scraped_dates (
+    digest_date TEXT PRIMARY KEY,
+    scraped_at TEXT NOT NULL,
+    run_id INTEGER REFERENCES ingestion_runs(id),
+    papers_found INTEGER NOT NULL DEFAULT 0
+);
+"""
+        conn.executescript(v3_schema)
+        conn.execute("PRAGMA user_version = 3")
+
+        init_db_on_conn(conn)
+
+        version = conn.execute("PRAGMA user_version").fetchone()[0]
+        assert version == CURRENT_SCHEMA_VERSION
+
+        # category column should exist
+        cols = conn.execute("PRAGMA table_info(papers)").fetchall()
+        col_names = [c["name"] for c in cols]
+        assert "category" in col_names
+
+        conn.close()
+
+
+class TestCategoryColumn:
+    def test_upsert_paper_with_category(self, db_conn):
+        paper = _make_paper(category="Computer Vision and Graphics")
+        upsert_paper(db_conn, paper)
+        fetched = get_paper(db_conn, "abc123")
+        assert fetched["category"] == "Computer Vision and Graphics"
+
+    def test_upsert_paper_without_category(self, db_conn):
+        paper = _make_paper()
+        upsert_paper(db_conn, paper)
+        fetched = get_paper(db_conn, "abc123")
+        assert fetched["category"] is None
+
+    def test_upsert_updates_category(self, db_conn):
+        paper = _make_paper()
+        upsert_paper(db_conn, paper)
+        paper["category"] = "Natural Language Processing"
+        upsert_paper(db_conn, paper)
+        fetched = get_paper(db_conn, "abc123")
+        assert fetched["category"] == "Natural Language Processing"

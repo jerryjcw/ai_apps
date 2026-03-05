@@ -50,6 +50,7 @@ def _raw_paper_to_db_dict(paper: RawPaper, digest_date_iso: str) -> dict:
         "year": paper.year,
         "published_date": paper.publication_date,
         "scholar_inbox_score": paper.score,
+        "category": paper.category,
         "ingested_at": now_utc(),
     }
 
@@ -98,9 +99,9 @@ async def run_backfill(
 
     logger.info("Backfill: %d missing dates to scrape", len(missing))
 
-    for d in missing:
+    for iso_date in missing:
+        d = date.fromisoformat(iso_date)
         api_date = _date_to_api_format(d)
-        iso_date = d.isoformat()
 
         try:
             papers = await scrape_date(config, api_date, score_threshold)
@@ -129,7 +130,7 @@ async def run_backfill(
                 papers_ingested=ingested,
                 status="completed",
             )
-            record_scraped_date(conn, iso_date)
+            record_scraped_date(conn, iso_date, run_id=run_id, papers_found=len(papers))
 
         result.total_papers_ingested += ingested
         logger.info(

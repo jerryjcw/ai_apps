@@ -33,7 +33,8 @@ CREATE TABLE IF NOT EXISTS papers (
     ingested_at         TEXT NOT NULL,
     last_cited_check    TEXT,
     citation_count      INTEGER NOT NULL DEFAULT 0,
-    citation_velocity   REAL NOT NULL DEFAULT 0.0
+    citation_velocity   REAL NOT NULL DEFAULT 0.0,
+    category            TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_papers_status ON papers(status);
@@ -98,10 +99,19 @@ def _migrate_v2_to_v3(conn: sqlite3.Connection) -> None:
         pass  # Column already exists
 
 
+def _migrate_v3_to_v4(conn: sqlite3.Connection) -> None:
+    """Add category column to papers table."""
+    try:
+        conn.execute("ALTER TABLE papers ADD COLUMN category TEXT")
+    except sqlite3.OperationalError:
+        pass  # Column already exists
+
+
 # Migration functions: version_from -> callable
 _MIGRATIONS: dict[int, callable] = {
     1: _migrate_v1_to_v2,
     2: _migrate_v2_to_v3,
+    3: _migrate_v3_to_v4,
 }
 
 
@@ -205,12 +215,14 @@ def upsert_paper(conn: sqlite3.Connection, paper: dict) -> bool:
         INSERT INTO papers (
             id, title, authors, abstract, url, arxiv_id, doi, venue, year,
             published_date, scholar_inbox_score, status, manual_status,
-            ingested_at, last_cited_check, citation_count, citation_velocity
+            ingested_at, last_cited_check, citation_count, citation_velocity,
+            category
         ) VALUES (
             :id, :title, :authors, :abstract, :url, :arxiv_id, :doi, :venue, :year,
             :published_date, :scholar_inbox_score,
             :status, :manual_status, :ingested_at,
-            :last_cited_check, :citation_count, :citation_velocity
+            :last_cited_check, :citation_count, :citation_velocity,
+            :category
         )
         ON CONFLICT(id) DO UPDATE SET
             title = excluded.title,
@@ -222,7 +234,8 @@ def upsert_paper(conn: sqlite3.Connection, paper: dict) -> bool:
             venue = excluded.venue,
             year = excluded.year,
             published_date = excluded.published_date,
-            scholar_inbox_score = excluded.scholar_inbox_score
+            scholar_inbox_score = excluded.scholar_inbox_score,
+            category = excluded.category
     """
     defaults = {
         "status": "active",
@@ -239,6 +252,7 @@ def upsert_paper(conn: sqlite3.Connection, paper: dict) -> bool:
         "venue": None,
         "year": None,
         "scholar_inbox_score": None,
+        "category": None,
     }
     params = {**defaults, **paper}
 
@@ -356,6 +370,17 @@ def get_papers_due_for_poll(conn: sqlite3.Connection, now: str) -> list[dict]:
         )
     """
     rows = conn.execute(sql, {"now": now}).fetchall()
+    return _rows_to_dicts(rows)
+
+
+def get_papers_never_polled(conn: sqlite3.Connection) -> list[dict]:
+    """Return papers that have never had citation data collected.
+
+    Selects papers where ``last_cited_check IS NULL`` and ``status != 'pruned'``.
+    """
+    rows = conn.execute(
+        "SELECT * FROM papers WHERE last_cited_check IS NULL AND status != 'pruned'"
+    ).fetchall()
     return _rows_to_dicts(rows)
 
 

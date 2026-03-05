@@ -45,6 +45,7 @@ papers
 ├── year            INTEGER
 ├── scholar_inbox_score  REAL         (recommendation score 0.0-1.0)
 ├── doi                 TEXT              (nullable, DOI identifier)
+├── category            TEXT              (Scholar Inbox topic category, e.g. "Computer Vision and Graphics")
 ├── published_date      TEXT              (ISO 8601, actual publication date)
 ├── manual_status       INTEGER DEFAULT 0 (1 if status was manually set)
 ├── digest_date         TEXT              (YYYY-MM-DD, date of Scholar Inbox digest)
@@ -120,20 +121,26 @@ Key API endpoints:
 
 ### Authentication Strategy
 
-Scholar Inbox is protected by Cloudflare. The **login page embeds a Cloudflare Turnstile CAPTCHA** (`cf-turnstile-response` hidden input) that **cannot be bypassed programmatically** — headless Playwright, stealth plugins (`patchright`, `undetected-playwright`), and even real Chrome (`channel="chrome"`) with a fresh profile all fail because the Turnstile widget requires an explicit user click. The approach:
+Scholar Inbox is protected by Cloudflare. The **login page embeds a Cloudflare Turnstile CAPTCHA** (`cf-turnstile-response` hidden input) that **cannot be bypassed programmatically** — headless Playwright, stealth plugins (`patchright`, `undetected-playwright`), and even real Chrome (`channel="chrome"`) with a fresh profile all fail because the Turnstile widget requires an explicit user click.
 
-1. **One-time headed login (~weekly)** — launch Playwright in **headed (visible) mode**, pre-fill credentials, and prompt the user to click the Turnstile checkbox and submit. Save cookies to `data/cookies.json`. Takes ~10 seconds of manual interaction.
-2. **Cookie-based API access** — only the `session` cookie (on `api.scholar-inbox.com`, expires ~7 days after login) is needed. Subsequent ingestion runs use this cookie directly with `httpx` — no browser needed. Multiple concurrent accesses are supported with no rate limiting.
-3. **Session refresh** — when cookies expire (~7 days), trigger headed login again. The CLI command `scholar-curate login` handles this.
+**Primary approach: Chrome cookie extraction.** Since the user is already logged into Scholar Inbox in their Chrome browser, we extract the session cookie directly from Chrome's cookie store using `browser_cookie3`. This avoids any manual browser interaction.
 
-Multiple accesses with the same session cookie are fully supported with no rate limiting observed.
+The `ensure_session()` fallback order:
+
+1. **Saved cookies** — load from `data/cookies.json`. If valid, use immediately (no browser interaction).
+2. **Chrome extraction** — read Chrome's cookie store via `browser_cookie3`, verify the session cookie, and save to `cookies.json` for future use. Run manually with `scholar-curate grab-session`.
+3. **Playwright manual login (last resort)** — launch a headed browser for the user to solve Turnstile. Used only when Chrome has no valid cookie (e.g. after clearing browser data).
+
+**Cookie lifecycle:** The `session` cookie on `api.scholar-inbox.com` expires ~7 days after login. When it expires, `ensure_session()` automatically tries Chrome extraction before falling back to Playwright. Multiple accesses with the same session cookie are fully supported with no rate limiting observed.
 
 ### Ingestion Flow
 
 ```
 1. Load saved cookies from data/cookies.json
 2. Verify session: GET /api/session_info → check is_logged_in == true
-   - If expired → trigger headed Playwright login, save new cookies
+   - If expired → try Chrome cookie extraction via browser_cookie3
+   - If Chrome extraction fails → trigger headed Playwright login
+   - Save new cookies to data/cookies.json
 3. Fetch today's papers: GET /api/
    - Or fetch a specific date: GET /api/?date=MM-DD-YYYY
    - Or fetch a date range: GET /api/?from=MM-DD-YYYY&to=MM-DD-YYYY
@@ -350,11 +357,13 @@ scholar_inbox_curate/
 ```
 scholar-curate ingest         # Run paper ingestion now
 scholar-curate backfill       # Scrape missed digest dates within lookback window
-scholar-curate poll-citations  # Run citation polling now
+scholar-curate poll-citations      # Run citation polling now
+scholar-curate collect-citations   # Collect citation data for never-polled papers
 scholar-curate prune          # Run prune/promote rules now
 scholar-curate serve          # Start the web UI (FastAPI)
 scholar-curate run            # Start scheduler (ingest + poll on cron)
 scholar-curate stats          # Print DB summary (paper counts by status)
+scholar-curate grab-session   # Extract session cookie from Chrome browser
 scholar-curate login          # Launch headed browser for manual Turnstile auth
 scholar-curate reset-session  # Delete cookies + browser profile, then re-auth
 ```

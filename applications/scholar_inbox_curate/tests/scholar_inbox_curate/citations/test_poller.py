@@ -7,7 +7,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from src.citations.poller import _should_fetch_openalex, run_citation_poll
+from src.citations.poller import (
+    _should_fetch_openalex,
+    collect_citations_for_unpolled,
+    run_citation_poll,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -260,3 +264,135 @@ class TestRunCitationPoll:
             # Due to datetime.now mock limitations, we check call count
             # At minimum it should have been called for some papers
             assert mock_oa.fetch_yearly_citations.call_count >= 1
+
+
+# ---------------------------------------------------------------------------
+# collect_citations_for_unpolled
+# ---------------------------------------------------------------------------
+
+class TestCollectCitationsForUnpolled:
+    @pytest.mark.asyncio
+    async def test_no_unpolled_papers(self):
+        """Empty list → returns 0, no work done."""
+        with patch("src.citations.poller.db") as mock_db:
+            mock_conn = MagicMock()
+            mock_db.get_connection.return_value.__enter__ = MagicMock(
+                return_value=mock_conn
+            )
+            mock_db.get_connection.return_value.__exit__ = MagicMock(
+                return_value=False
+            )
+            mock_db.get_papers_never_polled.return_value = []
+
+            config = MagicMock()
+            result = await collect_citations_for_unpolled(config, ":memory:")
+            assert result == 0
+
+    @pytest.mark.asyncio
+    async def test_full_collect_flow(self):
+        """Full cycle: S2 fetch, snapshots, velocity, update — no OpenAlex."""
+        papers = [
+            {"id": "arxiv:2301.00001", "title": "Paper 1"},
+            {"id": "s2hash123", "title": "Paper 2"},
+        ]
+
+        with (
+            patch("src.citations.poller.db") as mock_db,
+            patch("src.citations.poller.semantic_scholar") as mock_s2,
+            patch("src.citations.poller.velocity") as mock_vel,
+            patch("src.citations.poller.openalex") as mock_oa,
+            patch("src.citations.poller.httpx") as mock_httpx,
+        ):
+            mock_conn = MagicMock()
+            mock_db.get_connection.return_value.__enter__ = MagicMock(
+                return_value=mock_conn
+            )
+            mock_db.get_connection.return_value.__exit__ = MagicMock(
+                return_value=False
+            )
+            mock_db.get_papers_never_polled.return_value = papers
+
+            mock_s2.fetch_citations_batch = AsyncMock(
+                return_value={"arxiv:2301.00001": 42, "s2hash123": 15}
+            )
+            mock_vel.update_velocities_bulk = MagicMock()
+            mock_vel.compute_velocity = MagicMock(return_value=3.5)
+
+            mock_client = AsyncMock()
+            mock_httpx.AsyncClient.return_value.__aenter__ = AsyncMock(
+                return_value=mock_client
+            )
+            mock_httpx.AsyncClient.return_value.__aexit__ = AsyncMock(
+                return_value=False
+            )
+
+            config = MagicMock()
+            config.secrets.semantic_scholar_api_key = "test-key"
+            config.citations.semantic_scholar_batch_size = 100
+
+            result = await collect_citations_for_unpolled(config, ":memory:")
+            assert result == 2
+
+            # S2 was called
+            mock_s2.fetch_citations_batch.assert_called_once()
+
+            # Snapshots inserted for both papers
+            assert mock_db.insert_snapshot.call_count == 2
+
+            # Velocity updated
+            mock_vel.update_velocities_bulk.assert_called_once()
+
+            # Paper citations updated for both
+            assert mock_db.update_paper_citations.call_count == 2
+
+            # OpenAlex was NOT called (skipped for unpolled collection)
+            mock_oa.fetch_yearly_citations.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_partial_s2_results(self):
+        """When S2 returns counts for only some papers, only those get updated."""
+        papers = [
+            {"id": "p1", "title": "Found"},
+            {"id": "p2", "title": "Not Found"},
+        ]
+
+        with (
+            patch("src.citations.poller.db") as mock_db,
+            patch("src.citations.poller.semantic_scholar") as mock_s2,
+            patch("src.citations.poller.velocity") as mock_vel,
+            patch("src.citations.poller.httpx") as mock_httpx,
+        ):
+            mock_conn = MagicMock()
+            mock_db.get_connection.return_value.__enter__ = MagicMock(
+                return_value=mock_conn
+            )
+            mock_db.get_connection.return_value.__exit__ = MagicMock(
+                return_value=False
+            )
+            mock_db.get_papers_never_polled.return_value = papers
+
+            # S2 only returns a count for p1
+            mock_s2.fetch_citations_batch = AsyncMock(return_value={"p1": 10})
+            mock_vel.update_velocities_bulk = MagicMock()
+            mock_vel.compute_velocity = MagicMock(return_value=1.0)
+
+            mock_client = AsyncMock()
+            mock_httpx.AsyncClient.return_value.__aenter__ = AsyncMock(
+                return_value=mock_client
+            )
+            mock_httpx.AsyncClient.return_value.__aexit__ = AsyncMock(
+                return_value=False
+            )
+
+            config = MagicMock()
+            config.secrets.semantic_scholar_api_key = "key"
+            config.citations.semantic_scholar_batch_size = 100
+
+            result = await collect_citations_for_unpolled(config, ":memory:")
+            assert result == 2  # both papers counted as processed
+
+            # Only 1 snapshot inserted (p1)
+            assert mock_db.insert_snapshot.call_count == 1
+
+            # Only 1 paper citations updated (p1)
+            assert mock_db.update_paper_citations.call_count == 1

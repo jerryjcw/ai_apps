@@ -69,6 +69,17 @@ class TestResolvedToDbDict:
         d = _resolved_to_db_dict(paper)
         assert d["url"] == "https://scholar-inbox.com/paper/1"
 
+    def test_includes_category(self):
+        paper = _make_resolved()
+        paper.category = "Computer Vision and Graphics"
+        d = _resolved_to_db_dict(paper)
+        assert d["category"] == "Computer Vision and Graphics"
+
+    def test_category_none_by_default(self):
+        paper = _make_resolved()
+        d = _resolved_to_db_dict(paper)
+        assert d["category"] is None
+
 
 # ---------------------------------------------------------------------------
 # run_ingest

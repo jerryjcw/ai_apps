@@ -132,3 +132,53 @@ async def run_citation_poll(config: AppConfig, db_path: str) -> int:
 
     logger.info("Citation poll complete: %d papers processed", len(papers))
     return len(papers)
+
+
+async def collect_citations_for_unpolled(config: AppConfig, db_path: str) -> int:
+    """Collect citation data for papers that have never been polled.
+
+    Same as steps 1-2 of :func:`run_citation_poll` but targets only papers
+    with ``last_cited_check IS NULL``.  The OpenAlex enrichment step is
+    skipped — it will run on the next regular poll cycle.
+
+    Returns the number of papers processed.
+    """
+    now_iso = datetime.now(timezone.utc).isoformat()
+
+    with db.get_connection(db_path) as conn:
+        papers = db.get_papers_never_polled(conn)
+
+    if not papers:
+        logger.info("No unpolled papers found")
+        return 0
+
+    logger.info("Collecting citations for %d unpolled papers", len(papers))
+
+    paper_ids = [p["id"] for p in papers]
+
+    async with httpx.AsyncClient() as client:
+        s2_counts = await semantic_scholar.fetch_citations_batch(
+            client,
+            paper_ids,
+            api_key=config.secrets.semantic_scholar_api_key or None,
+            batch_size=config.citations.semantic_scholar_batch_size,
+        )
+
+    with db.get_connection(db_path) as conn:
+        for paper in papers:
+            pid = paper["id"]
+            count = s2_counts.get(pid)
+            if count is not None:
+                db.insert_snapshot(conn, pid, count, "semantic_scholar")
+
+        updated_ids = [pid for pid in paper_ids if pid in s2_counts]
+        velocity.update_velocities_bulk(conn, updated_ids, now_iso)
+
+        for pid in updated_ids:
+            vel = velocity.compute_velocity(conn, pid, now_iso)
+            db.update_paper_citations(conn, pid, s2_counts[pid], vel)
+
+    logger.info(
+        "Citation collection complete: %d unpolled papers processed", len(papers)
+    )
+    return len(papers)
