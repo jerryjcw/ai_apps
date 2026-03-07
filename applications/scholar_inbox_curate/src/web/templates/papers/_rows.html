@@ -1,32 +1,104 @@
-<tbody>
-    {% if papers %}
-        {% for paper in papers %}
-        <tr>
-            <td class="title-cell">
-                <a href="/papers/{{ paper.id }}">{{ paper.title|truncate(80) }}</a>
-            </td>
-            <td>{{ paper.authors|first_author }}</td>
-            <td>{{ paper.year or '—' }}</td>
-            <td>{{ "%.0f"|format(paper.scholar_inbox_score) if paper.scholar_inbox_score else '—' }}</td>
-            <td>{{ paper.citation_count }}</td>
-            <td>{{ "%.1f"|format(paper.citation_velocity) }} /mo</td>
-            <td>{% with status=paper.status %}{% include "components/_status_badge.html" %}{% endwith %}</td>
-            <td>{{ paper.category or '—' }}</td>
-            <td>{{ paper.ingested_at|relative_date }}</td>
-        </tr>
-        {% endfor %}
-    {% else %}
-        <tr>
-            <td colspan="9">
-                {% if search_query or status_filter %}
-                    No papers match your filters.
-                {% else %}
-                    No papers tracked yet. <a href="/settings">Run an ingestion</a> to get started.
-                {% endif %}
-            </td>
-        </tr>
-    {% endif %}
-</tbody>
+<div class="table-responsive">
+    <table>
+        <caption class="sr-only">Tracked papers</caption>
+        <thead>
+            <tr>
+                <th scope="col" {% if sort_by == 'title' %}aria-sort="{{ 'ascending' if sort_order == 'asc' else 'descending' }}"{% endif %}>
+                    <a href="#"
+                       hx-get="/partials/paper-rows"
+                       hx-vals='{"sort": "title", "order": "{{ 'asc' if sort_by == 'title' and sort_order == 'desc' else 'desc' }}", "page": "1"}'
+                       hx-target="#paper-table-body"
+                       hx-include="#paper-filters"
+                       hx-push-url="true">
+                        Title {% if sort_by == 'title' %}{{ '▲' if sort_order == 'asc' else '▼' }}{% endif %}
+                    </a>
+                </th>
+                <th scope="col">Authors</th>
+                <th scope="col" {% if sort_by == 'year' %}aria-sort="{{ 'ascending' if sort_order == 'asc' else 'descending' }}"{% endif %}>
+                    <a href="#"
+                       hx-get="/partials/paper-rows"
+                       hx-vals='{"sort": "year", "order": "{{ 'asc' if sort_by == 'year' and sort_order == 'desc' else 'desc' }}", "page": "1"}'
+                       hx-target="#paper-table-body"
+                       hx-include="#paper-filters"
+                       hx-push-url="true">
+                        Year {% if sort_by == 'year' %}{{ '▲' if sort_order == 'asc' else '▼' }}{% endif %}
+                    </a>
+                </th>
+                <th scope="col" {% if sort_by == 'scholar_inbox_score' %}aria-sort="{{ 'ascending' if sort_order == 'asc' else 'descending' }}"{% endif %}>
+                    <a href="#"
+                       hx-get="/partials/paper-rows"
+                       hx-vals='{"sort": "scholar_inbox_score", "order": "{{ 'asc' if sort_by == 'scholar_inbox_score' and sort_order == 'desc' else 'desc' }}", "page": "1"}'
+                       hx-target="#paper-table-body"
+                       hx-include="#paper-filters"
+                       hx-push-url="true">
+                        Score {% if sort_by == 'scholar_inbox_score' %}{{ '▲' if sort_order == 'asc' else '▼' }}{% endif %}
+                    </a>
+                </th>
+                <th scope="col" {% if sort_by == 'citation_count' %}aria-sort="{{ 'ascending' if sort_order == 'asc' else 'descending' }}"{% endif %}>
+                    <a href="#"
+                       hx-get="/partials/paper-rows"
+                       hx-vals='{"sort": "citation_count", "order": "{{ 'asc' if sort_by == 'citation_count' and sort_order == 'desc' else 'desc' }}", "page": "1"}'
+                       hx-target="#paper-table-body"
+                       hx-include="#paper-filters"
+                       hx-push-url="true">
+                        Citations {% if sort_by == 'citation_count' %}{{ '▲' if sort_order == 'asc' else '▼' }}{% endif %}
+                    </a>
+                </th>
+                <th scope="col" {% if sort_by == 'citation_velocity' %}aria-sort="{{ 'ascending' if sort_order == 'asc' else 'descending' }}"{% endif %}>
+                    <a href="#"
+                       hx-get="/partials/paper-rows"
+                       hx-vals='{"sort": "citation_velocity", "order": "{{ 'asc' if sort_by == 'citation_velocity' and sort_order == 'desc' else 'desc' }}", "page": "1"}'
+                       hx-target="#paper-table-body"
+                       hx-include="#paper-filters"
+                       hx-push-url="true">
+                        Velocity {% if sort_by == 'citation_velocity' %}{{ '▲' if sort_order == 'asc' else '▼' }}{% endif %}
+                    </a>
+                </th>
+                <th scope="col">Status</th>
+                <th scope="col">Category</th>
+                <th scope="col" {% if sort_by == 'ingested_at' %}aria-sort="{{ 'ascending' if sort_order == 'asc' else 'descending' }}"{% endif %}>
+                    <a href="#"
+                       hx-get="/partials/paper-rows"
+                       hx-vals='{"sort": "ingested_at", "order": "{{ 'asc' if sort_by == 'ingested_at' and sort_order == 'desc' else 'desc' }}", "page": "1"}'
+                       hx-target="#paper-table-body"
+                       hx-include="#paper-filters"
+                       hx-push-url="true">
+                        Ingested {% if sort_by == 'ingested_at' %}{{ '▲' if sort_order == 'asc' else '▼' }}{% endif %}
+                    </a>
+                </th>
+            </tr>
+        </thead>
+        <tbody>
+            {% if papers %}
+                {% for paper in papers %}
+                <tr>
+                    <td class="title-cell">
+                        <a href="/papers/{{ paper.id }}" title="{{ paper.title }}">{{ paper.title|truncate(80) }}</a>
+                    </td>
+                    <td>{{ paper.authors|first_author }}</td>
+                    <td>{{ paper.year or '—' }}</td>
+                    <td>{{ "%.0f"|format(paper.scholar_inbox_score) if paper.scholar_inbox_score else '—' }}</td>
+                    <td>{{ paper.citation_count }}</td>
+                    <td>{{ "%.1f"|format(paper.citation_velocity) }} /mo</td>
+                    <td>{% with status=paper.status %}{% include "components/_status_badge.html" %}{% endwith %}</td>
+                    <td>{{ paper.category or '—' }}</td>
+                    <td>{{ paper.ingested_at|relative_date }}</td>
+                </tr>
+                {% endfor %}
+            {% else %}
+                <tr>
+                    <td colspan="9">
+                        {% if search_query or status_filter %}
+                            No papers match your filters.
+                        {% else %}
+                            No papers tracked yet. <a href="/settings">Run an ingestion</a> to get started.
+                        {% endif %}
+                    </td>
+                </tr>
+            {% endif %}
+        </tbody>
+    </table>
+</div>
 
 <!-- Pagination -->
 {% if total_pages > 1 %}
