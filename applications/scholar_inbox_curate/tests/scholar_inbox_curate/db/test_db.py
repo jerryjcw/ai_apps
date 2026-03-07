@@ -318,6 +318,30 @@ class TestListPapers:
         assert len(result) == 1
         assert result[0]["id"] == "p1"
 
+    def test_list_multi_word_search_matches_both_words(self, db_conn):
+        upsert_paper(db_conn, _make_paper("d1", "Video Generation with Latent Diffusion Models"))
+        upsert_paper(db_conn, _make_paper("d2", "Diffusion Policies for Robotics"))
+        upsert_paper(db_conn, _make_paper("d3", "Video Compression Algorithms"))
+        result = list_papers(db_conn, search="Diffusion Video")
+        assert len(result) == 1
+        assert result[0]["id"] == "d1"
+
+    def test_list_multi_word_search_across_fields(self, db_conn):
+        upsert_paper(db_conn, _make_paper(
+            "d4", "Novel Diffusion Approach", abstract="Applied to video synthesis tasks"
+        ))
+        upsert_paper(db_conn, _make_paper("d5", "Unrelated Paper", abstract="No match here"))
+        result = list_papers(db_conn, search="Diffusion video")
+        assert len(result) == 1
+        assert result[0]["id"] == "d4"
+
+    def test_count_multi_word_search(self, db_conn):
+        upsert_paper(db_conn, _make_paper("d1", "Video Generation with Latent Diffusion Models"))
+        upsert_paper(db_conn, _make_paper("d2", "Diffusion Policies for Robotics"))
+        upsert_paper(db_conn, _make_paper("d3", "Video Compression Algorithms"))
+        count = count_papers(db_conn, search="Diffusion Video")
+        assert count == 1
+
 
 class TestUpdatePaperStatus:
     def test_update_status(self, db_conn):

@@ -236,6 +236,10 @@ On full page load, query parameters are parsed by the route handler and used to 
 - Browser back button navigates to the previous state.
 - HTMX handles the back-navigation by re-fetching the URL and swapping content.
 
+### Partial Redirect on Refresh
+
+Since `hx-push-url="true"` pushes the partial URL (`/partials/paper-rows?...`) into the browser address bar, a page refresh would load the bare partial without the base layout. The `/partials/paper-rows` endpoint checks for the `HX-Request` header: if absent (direct browser load), it redirects to `/papers` with the same query parameters, serving the full page.
+
 ---
 
 ## Progressive Enhancement

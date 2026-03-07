@@ -141,7 +141,7 @@ CREATE TABLE IF NOT EXISTS scraped_dates (
 Rather than using a migration framework (overkill for a personal tool), the database uses a `schema_version` pragma and a series of migration functions:
 
 ```python
-CURRENT_SCHEMA_VERSION = 2
+CURRENT_SCHEMA_VERSION = 4
 
 def init_db(db_path: str):
     """Create tables if they don't exist and run any pending migrations."""
@@ -149,7 +149,7 @@ def init_db(db_path: str):
         version = conn.execute("PRAGMA user_version").fetchone()[0]
 
         if version == 0:
-            # Fresh database — create all tables with V2 schema
+            # Fresh database — create all tables with latest schema
             conn.executescript(_SCHEMA_V1)
             conn.execute(f"PRAGMA user_version = {CURRENT_SCHEMA_VERSION}")
         else:
@@ -163,6 +163,8 @@ Migration functions are registered in order:
 _MIGRATIONS = {
     # version_from: migration_function
     1: _migrate_v1_to_v2,  # adds scraped_dates table + digest_date column + run_id/papers_found
+    2: _migrate_v2_to_v3,  # adds doi column to papers table
+    3: _migrate_v3_to_v4,  # adds category column to papers table
 }
 
 def _run_migrations(conn, current_version: int):
@@ -228,7 +230,12 @@ def list_papers(
     limit: int = 50,
     offset: int = 0,
 ) -> list[dict]:
-    """List papers with optional filtering, sorting, and pagination."""
+    """List papers with optional filtering, sorting, and pagination.
+
+    Search supports multi-word fuzzy matching: the query is split on whitespace
+    and each word must match independently (AND logic) across title, authors,
+    or abstract. E.g. "Diffusion Video" matches papers containing both words.
+    """
 
 def update_paper_status(conn, paper_id: str, status: str, manual: bool = False):
     """Update paper status. If manual=True, sets manual_status=1."""
@@ -265,7 +272,8 @@ def count_papers(
 ) -> int:
     """Count papers matching the given filters.
 
-    Used by the web UI for pagination. Mirrors the filter logic of list_papers().
+    Used by the web UI for pagination. Mirrors the filter logic of list_papers(),
+    including multi-word fuzzy search (split on whitespace, AND each word).
     """
 
 def paper_exists(conn, paper_id: str) -> bool:

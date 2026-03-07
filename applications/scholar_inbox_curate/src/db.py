@@ -298,9 +298,11 @@ def list_papers(
         params.append(status)
 
     if search is not None:
-        conditions.append("(title LIKE ? OR authors LIKE ? OR abstract LIKE ?)")
-        search_pattern = f"%{search}%"
-        params.extend([search_pattern, search_pattern, search_pattern])
+        words = search.split()
+        for word in words:
+            conditions.append("(title LIKE ? OR authors LIKE ? OR abstract LIKE ?)")
+            pattern = f"%{word}%"
+            params.extend([pattern, pattern, pattern])
 
     where_clause = ""
     if conditions:
@@ -412,9 +414,11 @@ def count_papers(
         params.append(status)
 
     if search is not None:
-        conditions.append("(title LIKE ? OR authors LIKE ? OR abstract LIKE ?)")
-        search_pattern = f"%{search}%"
-        params.extend([search_pattern, search_pattern, search_pattern])
+        words = search.split()
+        for word in words:
+            conditions.append("(title LIKE ? OR authors LIKE ? OR abstract LIKE ?)")
+            pattern = f"%{word}%"
+            params.extend([pattern, pattern, pattern])
 
     where_clause = ""
     if conditions:
