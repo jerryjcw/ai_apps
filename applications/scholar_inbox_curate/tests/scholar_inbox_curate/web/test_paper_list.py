@@ -23,17 +23,20 @@ def client(web_config):
     return TestClient(app, follow_redirects=True)
 
 
-def _add_paper(db_path, paper_id, title, status="active", velocity=5.0, authors='["Author"]'):
+def _add_paper(db_path, paper_id, title, status="active", velocity=5.0, authors='["Author"]', abstract=None):
+    paper = {
+        "id": paper_id,
+        "title": title,
+        "authors": authors,
+        "ingested_at": now_utc(),
+        "citation_count": 10,
+        "citation_velocity": velocity,
+        "status": status,
+    }
+    if abstract is not None:
+        paper["abstract"] = abstract
     with get_connection(db_path) as conn:
-        upsert_paper(conn, {
-            "id": paper_id,
-            "title": title,
-            "authors": authors,
-            "ingested_at": now_utc(),
-            "citation_count": 10,
-            "citation_velocity": velocity,
-            "status": status,
-        })
+        upsert_paper(conn, paper)
 
 
 class TestPaperListRoute:
@@ -111,6 +114,28 @@ class TestPaperListFiltering:
         assert b"Transformer Architecture" in resp.content
         assert b"Diffusion Models" not in resp.content
 
+    def test_multi_word_search_matches_both_words(self, client, web_config):
+        _add_paper(web_config.db_path, "d1", "Video Generation with Latent Diffusion Models")
+        _add_paper(web_config.db_path, "d2", "Diffusion Policies for Robotics")
+        _add_paper(web_config.db_path, "d3", "Video Compression Algorithms")
+        resp = client.get("/papers?q=Diffusion+Video")
+        assert b"Video Generation with Latent Diffusion" in resp.content
+        assert b"Diffusion Policies" not in resp.content
+        assert b"Video Compression" not in resp.content
+
+    def test_multi_word_search_excludes_partial_match(self, client, web_config):
+        _add_paper(web_config.db_path, "d1", "Only Diffusion Here")
+        resp = client.get("/papers?q=Diffusion+Video")
+        assert b"Only Diffusion Here" not in resp.content
+
+    def test_multi_word_search_across_fields(self, client, web_config):
+        _add_paper(web_config.db_path, "d1", "Novel Diffusion Approach",
+                   abstract="Applied to video synthesis tasks")
+        _add_paper(web_config.db_path, "d2", "Unrelated Paper", abstract="Nothing here")
+        resp = client.get("/papers?q=Diffusion+video")
+        assert b"Novel Diffusion Approach" in resp.content
+        assert b"Unrelated Paper" not in resp.content
+
     def test_invalid_sort_falls_back_to_default(self, client, web_config):
         _add_paper(web_config.db_path, "p1", "A Paper")
         resp = client.get("/papers?sort=malicious_col;DROP+TABLE")
@@ -134,36 +159,114 @@ class TestPaperListFiltering:
 
 
 class TestPaperRowsPartial:
+    """Tests for the HTMX partial endpoint (with HX-Request header)."""
+
+    HTMX_HEADERS = {"HX-Request": "true"}
+
     def test_returns_200(self, client):
-        resp = client.get("/partials/paper-rows")
+        resp = client.get("/partials/paper-rows", headers=self.HTMX_HEADERS)
         assert resp.status_code == 200
 
     def test_returns_html_partial(self, client, web_config):
         _add_paper(web_config.db_path, "p1", "Partial Paper")
-        resp = client.get("/partials/paper-rows")
+        resp = client.get("/partials/paper-rows", headers=self.HTMX_HEADERS)
         assert b"Partial Paper" in resp.content
-        # Should NOT contain full page structure
+        # Should NOT contain full page structure (no base.html wrapper)
         assert b"<!DOCTYPE" not in resp.content
-        assert b"<nav>" not in resp.content
 
     def test_filtering_works_in_partial(self, client, web_config):
         _add_paper(web_config.db_path, "a1", "Active Paper", status="active")
         _add_paper(web_config.db_path, "p1", "Pruned Paper", status="pruned")
-        resp = client.get("/partials/paper-rows?status=active")
+        resp = client.get("/partials/paper-rows?status=active", headers=self.HTMX_HEADERS)
         assert b"Active Paper" in resp.content
         assert b"Pruned Paper" not in resp.content
 
     def test_pagination_shown_for_many_papers(self, client, web_config):
         for i in range(30):
             _add_paper(web_config.db_path, f"paper-{i}", f"Paper {i}", velocity=float(i))
-        resp = client.get("/partials/paper-rows")
+        resp = client.get("/partials/paper-rows", headers=self.HTMX_HEADERS)
         assert b"Page 1 of 2" in resp.content
 
     def test_page_2_shows_different_papers(self, client, web_config):
         # Create 30 papers with different titles
         for i in range(30):
             _add_paper(web_config.db_path, f"paper-{i:02d}", f"Paper Title {i:02d}", velocity=float(i))
-        resp1 = client.get("/partials/paper-rows?page=1")
-        resp2 = client.get("/partials/paper-rows?page=2")
+        resp1 = client.get("/partials/paper-rows?page=1", headers=self.HTMX_HEADERS)
+        resp2 = client.get("/partials/paper-rows?page=2", headers=self.HTMX_HEADERS)
         # At least some content differs between pages
         assert resp1.content != resp2.content
+
+    def test_partial_includes_column_headers(self, client, web_config):
+        """Column headers must be present in the HTMX partial so they survive swaps."""
+        _add_paper(web_config.db_path, "p1", "A Paper")
+        resp = client.get("/partials/paper-rows", headers=self.HTMX_HEADERS)
+        assert b"<thead>" in resp.content
+        assert b"Title" in resp.content
+        assert b"Citations" in resp.content
+        assert b"Velocity" in resp.content
+        assert b"Status" in resp.content
+
+    def test_partial_has_valid_table_structure(self, client, web_config):
+        """The partial must use <tbody> inside <table>, not a <div>."""
+        _add_paper(web_config.db_path, "p1", "A Paper")
+        resp = client.get("/partials/paper-rows", headers=self.HTMX_HEADERS)
+        html = resp.content.decode()
+        # Table must contain thead and tbody, not a bare div
+        assert "<table>" in html
+        assert "<thead>" in html
+        assert "<tbody>" in html
+
+    def test_column_headers_preserved_after_status_filter(self, client, web_config):
+        """Switching status filter must not lose column headers."""
+        _add_paper(web_config.db_path, "p1", "Active Paper", status="active")
+        _add_paper(web_config.db_path, "p2", "Pruned Paper", status="pruned")
+        resp = client.get("/partials/paper-rows?status=active", headers=self.HTMX_HEADERS)
+        assert b"<thead>" in resp.content
+        assert b"Title" in resp.content
+        assert b"Citations" in resp.content
+
+
+class TestPartialRedirectOnRefresh:
+    """Direct browser loads of /partials/paper-rows should redirect to /papers."""
+
+    def test_redirects_to_papers(self, client, web_config):
+        _add_paper(web_config.db_path, "p1", "A Paper")
+        # follow_redirects=True is on by default, so we get the full page
+        resp = client.get("/partials/paper-rows")
+        assert resp.status_code == 200
+        assert b"<!DOCTYPE" in resp.content
+        assert b"Papers" in resp.content
+
+    def test_preserves_query_params_on_redirect(self, client, web_config):
+        _add_paper(web_config.db_path, "p1", "Active Paper", status="active")
+        resp = client.get("/partials/paper-rows?status=active&q=Active")
+        assert resp.status_code == 200
+        assert b"Active Paper" in resp.content
+        assert b"<!DOCTYPE" in resp.content
+
+    def test_redirect_status_code(self, web_config):
+        """Without follow_redirects, should return 302."""
+        from src.web.app import create_app
+        no_follow_client = TestClient(create_app(web_config), follow_redirects=False)
+        resp = no_follow_client.get("/partials/paper-rows?status=active")
+        assert resp.status_code == 302
+        assert "/papers" in resp.headers["location"]
+        assert "status=active" in resp.headers["location"]
+
+
+class TestPaperTitleHover:
+    def test_title_attribute_on_paper_link(self, client, web_config):
+        """Paper link must have a title attribute showing the full title on hover."""
+        full_title = "A Very Long Paper Title That Would Normally Be Truncated In The Table View"
+        _add_paper(web_config.db_path, "p1", full_title)
+        resp = client.get("/papers")
+        html = resp.content.decode()
+        assert f'title="{full_title}"' in html
+
+    def test_title_attribute_in_partial(self, client, web_config):
+        """Title attribute must also be present in the HTMX partial."""
+        full_title = "Another Long Title For Testing Hover Tooltip Behavior In Partials"
+        _add_paper(web_config.db_path, "p1", full_title)
+        resp = client.get("/partials/paper-rows")
+        html = resp.content.decode()
+        assert f'title="{full_title}"' in html

@@ -105,9 +105,10 @@ def compute_velocity(conn, paper_id: str, now: str) -> float:
 
     # Velocity cannot be negative (citation counts shouldn't decrease,
     # but API data corrections can cause this)
-    velocity = max(0.0, citation_diff / months_elapsed)
+    if citation_diff <= 0:
+        return 0.0
 
-    return round(velocity, 2)
+    return citation_diff / months_elapsed
 ```
 
 ---

@@ -62,7 +62,8 @@ CREATE TABLE IF NOT EXISTS papers (
     ingested_at         TEXT NOT NULL,       -- ISO 8601
     last_cited_check    TEXT,                -- ISO 8601
     citation_count      INTEGER NOT NULL DEFAULT 0,
-    citation_velocity   REAL NOT NULL DEFAULT 0.0
+    citation_velocity   REAL NOT NULL DEFAULT 0.0,
+    resolve_failures    INTEGER NOT NULL DEFAULT 0   -- consecutive S2 resolution failures
 );
 
 CREATE INDEX IF NOT EXISTS idx_papers_status ON papers(status);
@@ -141,7 +142,8 @@ CREATE TABLE IF NOT EXISTS scraped_dates (
 Rather than using a migration framework (overkill for a personal tool), the database uses a `schema_version` pragma and a series of migration functions:
 
 ```python
-CURRENT_SCHEMA_VERSION = 2
+# CURRENT_SCHEMA_VERSION is imported from src/constants.py
+from src.constants import CURRENT_SCHEMA_VERSION  # currently 5
 
 def init_db(db_path: str):
     """Create tables if they don't exist and run any pending migrations."""
@@ -149,7 +151,7 @@ def init_db(db_path: str):
         version = conn.execute("PRAGMA user_version").fetchone()[0]
 
         if version == 0:
-            # Fresh database — create all tables with V2 schema
+            # Fresh database — create all tables with latest schema
             conn.executescript(_SCHEMA_V1)
             conn.execute(f"PRAGMA user_version = {CURRENT_SCHEMA_VERSION}")
         else:
@@ -163,6 +165,9 @@ Migration functions are registered in order:
 _MIGRATIONS = {
     # version_from: migration_function
     1: _migrate_v1_to_v2,  # adds scraped_dates table + digest_date column + run_id/papers_found
+    2: _migrate_v2_to_v3,  # adds doi column to papers table
+    3: _migrate_v3_to_v4,  # adds category column to papers table
+    4: _migrate_v4_to_v5,  # adds resolve_failures column to papers table
 }
 
 def _run_migrations(conn, current_version: int):
@@ -175,11 +180,12 @@ def _run_migrations(conn, current_version: int):
 
 This allows adding columns or tables in the future without requiring users to recreate their database.
 
-**Current Schema Version: 4**
+**Current Schema Version: 5**
 - V1: Initial schema with papers, citation_snapshots, ingestion_runs
 - V2: Adds scraped_dates table with run_id/papers_found columns for backfill audit trail
 - V3: Adds `doi` column to papers table
 - V4: Adds `category` column to papers table (Scholar Inbox topic category)
+- V5: Adds `resolve_failures` column to papers table (consecutive S2 resolution failure count)
 
 ### V1 → V2 Migration
 
@@ -228,7 +234,12 @@ def list_papers(
     limit: int = 50,
     offset: int = 0,
 ) -> list[dict]:
-    """List papers with optional filtering, sorting, and pagination."""
+    """List papers with optional filtering, sorting, and pagination.
+
+    Search supports multi-word fuzzy matching: the query is split on whitespace
+    and each word must match independently (AND logic) across title, authors,
+    or abstract. E.g. "Diffusion Video" matches papers containing both words.
+    """
 
 def update_paper_status(conn, paper_id: str, status: str, manual: bool = False):
     """Update paper status. If manual=True, sets manual_status=1."""
@@ -236,8 +247,23 @@ def update_paper_status(conn, paper_id: str, status: str, manual: bool = False):
 def update_paper_citations(conn, paper_id: str, citation_count: int, velocity: float):
     """Update citation count and velocity after a poll cycle."""
 
-def get_papers_due_for_poll(conn, now: str) -> list[dict]:
+def count_non_pruned_papers(conn) -> int:
+    """Return the count of papers whose status is not 'pruned'.
+
+    Used by the citation poller to compute the per-cycle budget.
+    """
+
+def get_papers_due_for_poll(conn, now: str, limit: int | None = None) -> list[dict]:
     """Return papers that need citation polling based on age-based schedule.
+
+    Papers are ordered by *overdue ratio* so the most overdue papers are
+    polled first.  Never-polled papers sort first (highest priority).
+    The overdue ratio is ``days_since_last_check / scheduled_interval``,
+    which prevents starvation: a monthly paper 60 days overdue (ratio 2.0)
+    outranks a weekly paper 8 days overdue (ratio 1.14).
+
+    When *limit* is provided, at most that many papers are returned (used
+    for budget-based polling).
 
     Logic:
     - status='pruned' → skip
@@ -265,11 +291,43 @@ def count_papers(
 ) -> int:
     """Count papers matching the given filters.
 
-    Used by the web UI for pagination. Mirrors the filter logic of list_papers().
+    Used by the web UI for pagination. Mirrors the filter logic of list_papers(),
+    including multi-word fuzzy search (split on whitespace, AND each word).
     """
 
 def paper_exists(conn, paper_id: str) -> bool:
     """Check if a paper ID already exists in the database."""
+
+def get_dangling_papers(conn, max_failures: int = 3) -> list[dict]:
+    """Return papers with unresolved synthetic IDs (title: or si- prefix).
+
+    These papers were stored with fallback IDs because Semantic Scholar
+    resolution failed at ingestion time. They cannot be citation-polled
+    until re-resolved.
+
+    Papers that have failed resolution ``max_failures`` or more times
+    are excluded — they will be retried on the next run after the counter
+    is externally reset or the default ``max_failures`` is raised.
+
+    SQL: SELECT * FROM papers
+         WHERE (id LIKE 'title:%' OR id LIKE 'si-%')
+         AND resolve_failures < :max_failures
+    """
+
+def increment_resolve_failures(conn, paper_id: str) -> None:
+    """Increment the resolve_failures counter for a paper."""
+
+def reset_resolve_failures(conn, paper_id: str) -> None:
+    """Reset the resolve_failures counter to 0 (called on successful resolution)."""
+
+def replace_paper_id(conn, old_id: str, new_id: str, updated_fields: dict) -> bool:
+    """Replace a paper's synthetic ID with a resolved one and update metadata.
+
+    Deletes the old row (ON DELETE CASCADE removes any snapshots) and
+    inserts a new row with the resolved ID. Returns True if replacement
+    was performed, False if new_id already exists (dangling duplicate
+    is deleted).
+    """
 ```
 
 ### Citation Snapshot Operations
@@ -323,21 +381,19 @@ def record_scraped_date(conn, digest_date: str, run_id: int,
         papers_found: Number of papers above threshold for this date.
     """
 
-def get_scraped_dates(conn, since_date: str) -> set[str]:
-    """Return all digest dates (YYYY-MM-DD) that have been scraped since a given date.
+def get_scraped_dates(conn) -> set[str]:
+    """Return the set of all digest dates (YYYY-MM-DD) that have been scraped."""
 
-    Args:
-        since_date: Only return dates on or after this date (YYYY-MM-DD).
-    """
+def find_missing_dates(conn, lookback_days: int, today: date | None = None) -> list[str]:
+    """Identify weekday digest dates within the lookback window that have not been scraped.
 
-def find_missing_dates(conn, lookback_days: int) -> list[str]:
-    """Identify digest dates within the lookback window that have not been scraped.
-
-    Computes the date range [today - lookback_days, yesterday], subtracts
+    Computes the date range [today - lookback_days, yesterday], excludes
+    weekends (Scholar Inbox only publishes digests Mon–Fri), subtracts
     dates present in scraped_dates, and returns the missing dates sorted
     ascending as YYYY-MM-DD strings.
 
     Today is excluded because it may not have a digest yet.
+    The ``today`` parameter allows override for testing.
     """
 ```
 
