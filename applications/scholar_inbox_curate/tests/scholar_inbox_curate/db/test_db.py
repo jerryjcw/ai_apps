@@ -22,6 +22,7 @@ from src.db import (
     get_papers_never_polled,
     get_paper_count_by_status,
     count_papers,
+    count_non_pruned_papers,
     paper_exists,
     insert_snapshot,
     get_snapshots,
@@ -436,6 +437,99 @@ class TestGetPapersDueForPoll:
         )
         result = get_papers_due_for_poll(db_conn, "2026-02-26T00:00:00+00:00")
         assert len(result) == 1
+
+    def test_limit_caps_results(self, db_conn):
+        """When limit is provided, at most that many papers are returned."""
+        for i in range(5):
+            upsert_paper(db_conn, _make_paper(
+                paper_id=f"p{i}",
+                title=f"Paper {i}",
+                ingested_at="2026-02-20T00:00:00+00:00",
+            ))
+        result = get_papers_due_for_poll(db_conn, "2026-02-26T00:00:00+00:00", limit=3)
+        assert len(result) == 3
+
+    def test_limit_none_returns_all(self, db_conn):
+        """When limit is None, all eligible papers are returned."""
+        for i in range(5):
+            upsert_paper(db_conn, _make_paper(
+                paper_id=f"p{i}",
+                title=f"Paper {i}",
+                ingested_at="2026-02-20T00:00:00+00:00",
+            ))
+        result = get_papers_due_for_poll(db_conn, "2026-02-26T00:00:00+00:00")
+        assert len(result) == 5
+
+    def test_never_polled_papers_sorted_first(self, db_conn):
+        """Never-polled papers have highest priority (overdue_ratio = 1e9)."""
+        # Paper A: polled 8 days ago (young, 7-day interval -> ratio ~1.14)
+        upsert_paper(db_conn, _make_paper(
+            paper_id="polled",
+            title="Polled Paper",
+            ingested_at="2026-02-01T00:00:00+00:00",
+        ))
+        db_conn.execute(
+            "UPDATE papers SET last_cited_check = ? WHERE id = ?",
+            ("2026-02-18T00:00:00+00:00", "polled"),
+        )
+        # Paper B: never polled
+        upsert_paper(db_conn, _make_paper(
+            paper_id="unpolled",
+            title="Unpolled Paper",
+            ingested_at="2026-02-20T00:00:00+00:00",
+        ))
+
+        result = get_papers_due_for_poll(db_conn, "2026-02-26T00:00:00+00:00")
+        assert len(result) == 2
+        assert result[0]["id"] == "unpolled"
+
+    def test_higher_overdue_ratio_sorted_first(self, db_conn):
+        """A monthly paper 60 days overdue outranks a weekly paper 8 days overdue."""
+        now = "2026-03-15T00:00:00+00:00"
+
+        # Old paper (>12 months), 30-day interval, last polled 60 days ago -> ratio 2.0
+        upsert_paper(db_conn, _make_paper(
+            paper_id="old_overdue",
+            title="Old Overdue",
+            ingested_at="2024-06-01T00:00:00+00:00",
+        ))
+        db_conn.execute(
+            "UPDATE papers SET last_cited_check = ? WHERE id = ?",
+            ("2026-01-14T00:00:00+00:00", "old_overdue"),
+        )
+
+        # Young paper (<3 months), 7-day interval, last polled 8 days ago -> ratio ~1.14
+        upsert_paper(db_conn, _make_paper(
+            paper_id="young_due",
+            title="Young Due",
+            ingested_at="2026-02-01T00:00:00+00:00",
+        ))
+        db_conn.execute(
+            "UPDATE papers SET last_cited_check = ? WHERE id = ?",
+            ("2026-03-07T00:00:00+00:00", "young_due"),
+        )
+
+        result = get_papers_due_for_poll(db_conn, now)
+        assert len(result) == 2
+        assert result[0]["id"] == "old_overdue"
+        assert result[1]["id"] == "young_due"
+
+
+class TestCountNonPrunedPapers:
+    def test_empty_db(self, db_conn):
+        assert count_non_pruned_papers(db_conn) == 0
+
+    def test_counts_active_and_promoted(self, db_conn):
+        upsert_paper(db_conn, _make_paper("p1", "Paper 1"))
+        upsert_paper(db_conn, _make_paper("p2", "Paper 2"))
+        update_paper_status(db_conn, "p2", "promoted")
+        assert count_non_pruned_papers(db_conn) == 2
+
+    def test_excludes_pruned(self, db_conn):
+        upsert_paper(db_conn, _make_paper("p1", "Paper 1"))
+        upsert_paper(db_conn, _make_paper("p2", "Paper 2"))
+        update_paper_status(db_conn, "p2", "pruned")
+        assert count_non_pruned_papers(db_conn) == 1
 
 
 class TestGetPapersNeverPolled:

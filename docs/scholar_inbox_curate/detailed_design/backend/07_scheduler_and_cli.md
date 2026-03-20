@@ -115,7 +115,7 @@ async def run_ingest(config: AppConfig):
 
 ### `scholar-curate poll-citations`
 
-Run citation polling for papers due for a check.
+Run citation polling for papers due for a check. Respects the `poll_budget_fraction` setting to cap each cycle to a fraction of non-pruned papers, prioritizing the most overdue papers first.
 
 ```python
 @cli.command("poll-citations")
@@ -211,7 +211,8 @@ The backfill command:
 2. Iterates day-by-day over the missing dates, calling `scrape_date()` for each.
 3. Uses `backfill_score_threshold` (default 0.60) instead of the regular `score_threshold`.
 4. Records each successfully scraped date in `scraped_dates` to prevent redundant re-scraping.
-5. Reports a summary: dates checked, dates scraped, papers found, papers new, and any per-date errors.
+5. **Re-resolves dangling papers:** After all dates are scraped, automatically calls `re_resolve_dangling()` to re-attempt S2 resolution for any papers with synthetic fallback IDs (`title:` or `si-` prefix). This ensures that papers which failed resolution due to temporary HTTP errors (429, 4xx, 5xx) are retried on every backfill call, regardless of schedule.
+6. Reports a summary: dates checked, dates scraped, papers found, papers new, re-resolved count, and any per-date errors.
 
 Per-date errors are non-fatal — the command continues with remaining dates and reports failures at the end.
 
@@ -226,6 +227,31 @@ $ scholar-curate backfill --lookback 14
 [+] 02-22-2026: 6 papers found (3 new)
 [*] Backfill complete: 3 dates scraped, 26 papers found, 17 new
 ```
+
+### `scholar-curate re-resolve`
+
+Re-attempt Semantic Scholar resolution for papers with synthetic fallback IDs.
+
+```python
+@cli.command("re-resolve")
+@click.pass_context
+def re_resolve(ctx):
+    """Re-attempt resolution for papers with fallback IDs."""
+    config = ctx.obj["config"]
+    from src.ingestion.reresolver import re_resolve_dangling
+
+    result = asyncio.run(re_resolve_dangling(config))
+    click.echo(f"Dangling papers:  {result.total_dangling}")
+    click.echo(f"Resolved:         {result.resolved}")
+    click.echo(f"Duplicates:       {result.already_exists}")
+    click.echo(f"Still unresolved: {result.still_unresolved}")
+    if result.errors:
+        click.echo(f"Errors ({len(result.errors)}):")
+        for err in result.errors:
+            click.echo(f"  - {err}")
+```
+
+This command is also called automatically at the end of `run_backfill()`, so papers with synthetic IDs are re-resolved on every backfill cycle without manual intervention.
 
 ### `scholar-curate serve`
 
@@ -260,6 +286,38 @@ def run(ctx):
     start_scheduler(config)
 ```
 
+### `scholar-curate collect-citations`
+
+Collect citation data for papers that have never been polled (e.g. backfilled papers).
+
+```python
+@cli.command("collect-citations")
+@click.pass_context
+def collect_citations(ctx):
+    """Collect citation data for papers that have never been polled."""
+    from src.citations.poller import collect_citations_for_unpolled
+
+    config = ctx.obj["config"]
+    count = asyncio.run(collect_citations_for_unpolled(config, config.db_path))
+    click.echo(f"Citation collection complete: {count} unpolled papers processed")
+```
+
+### `scholar-curate grab-session`
+
+Extract the session cookie from the user's Chrome browser (no browser interaction needed).
+
+```python
+@cli.command("grab-session")
+@click.pass_context
+def grab_session(ctx):
+    """Extract session cookie from Chrome browser."""
+    from src.ingestion.scraper import extract_chrome_session
+
+    config = ctx.obj["config"]
+    asyncio.run(extract_chrome_session(config))
+    click.echo("Session cookie extracted from Chrome and saved.")
+```
+
 ### `scholar-curate login`
 
 Launch a headed browser for manual Turnstile authentication. Use this when cookies have expired and you need to re-authenticate without deleting the browser profile.
@@ -269,30 +327,37 @@ Launch a headed browser for manual Turnstile authentication. Use this when cooki
 @click.pass_context
 def login(ctx):
     """Launch headed browser for manual Scholar Inbox authentication."""
+    from src.ingestion.scraper import manual_login
+
     config = ctx.obj["config"]
-    from src.ingestion.scraper import _manual_login, _save_cookies
-    cookies = asyncio.run(_manual_login(config))
-    _save_cookies(config, cookies)
+    asyncio.run(manual_login(config))
     click.echo("Login successful. Cookies saved.")
 ```
 
 ### `scholar-curate reset-session`
 
-Delete cookies and browser profile, then force a fresh headed login.
+Delete cookies and browser profile to force re-authentication on next use.
 
 ```python
 @cli.command("reset-session")
-@click.confirmation_option(prompt="Delete browser session? You'll need to re-authenticate.")
+@click.confirmation_option(prompt="Delete browser session and cookies? You'll need to re-authenticate.")
 @click.pass_context
 def reset_session(ctx):
-    """Delete cookies and browser profile, then re-authenticate with Scholar Inbox."""
+    """Delete cookies and browser profile to force re-authentication."""
+    import shutil
+
     config = ctx.obj["config"]
-    from src.ingestion.scraper import reset_browser_session, _manual_login, _save_cookies
-    reset_browser_session(config)
-    click.echo("Browser session cleared. Launching login...")
-    cookies = asyncio.run(_manual_login(config))
-    _save_cookies(config, cookies)
-    click.echo("Re-authentication successful. Cookies saved.")
+    cookies_path = Path(config.db_path).parent / "cookies.json"
+    if cookies_path.exists():
+        cookies_path.unlink()
+        click.echo(f"Cookies deleted: {cookies_path}")
+
+    profile = Path(config.browser.profile_dir)
+    if profile.exists():
+        shutil.rmtree(profile)
+        click.echo(f"Browser profile deleted: {profile}")
+
+    click.echo("Browser session cleared.")
 ```
 
 ---
@@ -447,21 +512,24 @@ def run(ctx, with_web, port):
 $ scholar-curate --help
 Usage: scholar-curate [OPTIONS] COMMAND [ARGS]...
 
-  Scholar Inbox Curate — Track paper citation traction.
+  Scholar Inbox Curate — track citation traction for recommended papers.
 
 Options:
-  --config TEXT  Path to config file  [default: config.toml]
   -v, --verbose  Enable debug logging
-  --help         Show this message and exit.
+  --config TEXT   Path to config.toml  [default: config.toml]
+  --help          Show this message and exit.
 
 Commands:
-  backfill        Scrape missed digest dates within the lookback window.
-  ingest          Scrape Scholar Inbox for new paper recommendations.
-  login           Launch headed browser for manual Scholar Inbox authentication.
-  poll-citations  Poll citation counts for tracked papers.
-  prune           Run prune/promote rules on tracked papers.
-  reset-session   Delete cookies and browser profile, then re-authenticate.
-  run             Start the scheduler for automated ingestion and polling.
-  serve           Start the web UI server.
-  stats           Print database summary statistics.
+  backfill           Scrape missed digest dates within the lookback window.
+  collect-citations  Collect citation data for papers that have never been polled.
+  grab-session       Extract session cookie from Chrome browser.
+  ingest             Scrape Scholar Inbox for new paper recommendations.
+  login              Launch headed browser for manual Scholar Inbox authentication.
+  poll-citations     Poll citation counts for tracked papers.
+  prune              Run prune/promote rules on tracked papers.
+  re-resolve         Re-attempt S2 resolution for papers with fallback IDs.
+  reset-session      Delete cookies and browser profile to force re-authentication.
+  run                Start the scheduler for automated ingestion and polling.
+  serve              Start the web UI server.
+  stats              Print database summary statistics.
 ```

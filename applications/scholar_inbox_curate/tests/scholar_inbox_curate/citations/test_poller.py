@@ -64,9 +64,11 @@ class TestRunCitationPoll:
             mock_db.get_connection.return_value.__exit__ = MagicMock(
                 return_value=False
             )
+            mock_db.count_non_pruned_papers.return_value = 10
             mock_db.get_papers_due_for_poll.return_value = []
 
             config = MagicMock()
+            config.citations.poll_budget_fraction = 0.10
             result = await run_citation_poll(config, ":memory:")
             assert result == 0
 
@@ -103,6 +105,7 @@ class TestRunCitationPoll:
             mock_db.get_connection.return_value.__exit__ = MagicMock(
                 return_value=False
             )
+            mock_db.count_non_pruned_papers.return_value = 20
             mock_db.get_papers_due_for_poll.return_value = papers
 
             # Setup S2 mock
@@ -133,9 +136,15 @@ class TestRunCitationPoll:
             config.secrets.semantic_scholar_api_key = "test-key"
             config.secrets.scholar_inbox_email = "test@example.com"
             config.citations.semantic_scholar_batch_size = 100
+            config.citations.poll_budget_fraction = 0.10
 
             result = await run_citation_poll(config, ":memory:")
             assert result == 2
+
+            # Verify budget was computed: floor(20 * 0.10) = 2
+            mock_db.get_papers_due_for_poll.assert_called_once()
+            call_kwargs = mock_db.get_papers_due_for_poll.call_args
+            assert call_kwargs[1]["limit"] == 2
 
             # Verify S2 was called
             mock_s2.fetch_citations_batch.assert_called_once()
@@ -172,6 +181,7 @@ class TestRunCitationPoll:
             mock_db.get_connection.return_value.__exit__ = MagicMock(
                 return_value=False
             )
+            mock_db.count_non_pruned_papers.return_value = 10
             mock_db.get_papers_due_for_poll.return_value = papers
 
             # S2 returns empty (title: papers are skipped internally)
@@ -192,6 +202,7 @@ class TestRunCitationPoll:
             config.secrets.semantic_scholar_api_key = ""
             config.secrets.scholar_inbox_email = ""
             config.citations.semantic_scholar_batch_size = 100
+            config.citations.poll_budget_fraction = 0.10
 
             result = await run_citation_poll(config, ":memory:")
             assert result == 1
@@ -235,6 +246,7 @@ class TestRunCitationPoll:
             mock_db.get_connection.return_value.__exit__ = MagicMock(
                 return_value=False
             )
+            mock_db.count_non_pruned_papers.return_value = 100
             mock_db.get_papers_due_for_poll.return_value = papers
 
             mock_s2.fetch_citations_batch = AsyncMock(
@@ -256,6 +268,7 @@ class TestRunCitationPoll:
             config.secrets.semantic_scholar_api_key = "key"
             config.secrets.scholar_inbox_email = "test@example.com"
             config.citations.semantic_scholar_batch_size = 100
+            config.citations.poll_budget_fraction = 0.10
 
             await run_citation_poll(config, ":memory:")
 
@@ -264,6 +277,51 @@ class TestRunCitationPoll:
             # Due to datetime.now mock limitations, we check call count
             # At minimum it should have been called for some papers
             assert mock_oa.fetch_yearly_citations.call_count >= 1
+
+
+    @pytest.mark.asyncio
+    async def test_budget_minimum_is_one(self):
+        """Even with very few papers, budget is at least 1."""
+        with patch("src.citations.poller.db") as mock_db:
+            mock_conn = MagicMock()
+            mock_db.get_connection.return_value.__enter__ = MagicMock(
+                return_value=mock_conn
+            )
+            mock_db.get_connection.return_value.__exit__ = MagicMock(
+                return_value=False
+            )
+            # 3 papers * 0.10 = 0.3 -> floor = 0 -> clamped to 1
+            mock_db.count_non_pruned_papers.return_value = 3
+            mock_db.get_papers_due_for_poll.return_value = []
+
+            config = MagicMock()
+            config.citations.poll_budget_fraction = 0.10
+            await run_citation_poll(config, ":memory:")
+
+            mock_db.get_papers_due_for_poll.assert_called_once()
+            call_kwargs = mock_db.get_papers_due_for_poll.call_args
+            assert call_kwargs[1]["limit"] == 1
+
+    @pytest.mark.asyncio
+    async def test_budget_computation(self):
+        """Budget = floor(total * fraction), minimum 1."""
+        with patch("src.citations.poller.db") as mock_db:
+            mock_conn = MagicMock()
+            mock_db.get_connection.return_value.__enter__ = MagicMock(
+                return_value=mock_conn
+            )
+            mock_db.get_connection.return_value.__exit__ = MagicMock(
+                return_value=False
+            )
+            mock_db.count_non_pruned_papers.return_value = 150
+            mock_db.get_papers_due_for_poll.return_value = []
+
+            config = MagicMock()
+            config.citations.poll_budget_fraction = 0.10
+            await run_citation_poll(config, ":memory:")
+
+            call_kwargs = mock_db.get_papers_due_for_poll.call_args
+            assert call_kwargs[1]["limit"] == 15  # floor(150 * 0.10)
 
 
 # ---------------------------------------------------------------------------

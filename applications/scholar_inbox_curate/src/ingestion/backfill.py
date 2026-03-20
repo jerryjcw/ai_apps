@@ -15,6 +15,7 @@ from src.db import (
     find_missing_dates,
     get_connection,
     record_scraped_date,
+    reset_resolve_failures,
     upsert_paper,
     create_ingestion_run,
     update_ingestion_run,
@@ -33,6 +34,7 @@ class BackfillResult:
     dates_scraped: int = 0
     total_papers_found: int = 0
     total_papers_ingested: int = 0
+    papers_re_resolved: int = 0
     errors: list[str] = field(default_factory=list)
 
 
@@ -139,5 +141,17 @@ async def run_backfill(
             len(papers),
             ingested,
         )
+
+    # Reset failure counters so every paper gets fresh attempts this cycle.
+    with get_connection(config.db_path) as conn:
+        reset_resolve_failures(conn)
+
+    # Re-resolve any dangling papers (title: or si- prefix IDs) that
+    # failed S2 resolution on previous runs due to HTTP errors.
+    from src.ingestion.reresolver import re_resolve_dangling
+
+    re_result = await re_resolve_dangling(config)
+    result.papers_re_resolved = re_result.resolved + re_result.already_exists
+    result.errors.extend(re_result.errors)
 
     return result

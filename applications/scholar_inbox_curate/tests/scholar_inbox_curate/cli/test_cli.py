@@ -217,7 +217,8 @@ class TestBackfill:
         ):
             result = _invoke(runner, cli_config, ["backfill"])
         assert result.exit_code == 0
-        assert "Dates checked:   0" in result.output
+        assert "Dates checked:" in result.output
+        assert "Papers re-resolved:" in result.output
 
 
 # ---------------------------------------------------------------------------

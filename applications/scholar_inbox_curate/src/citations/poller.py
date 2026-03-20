@@ -47,13 +47,18 @@ async def run_citation_poll(config: AppConfig, db_path: str) -> int:
     now_iso = now_dt.isoformat()
 
     with db.get_connection(db_path) as conn:
-        papers = db.get_papers_due_for_poll(conn, now_iso)
+        total = db.count_non_pruned_papers(conn)
+        budget = max(1, int(total * config.citations.poll_budget_fraction))
+        papers = db.get_papers_due_for_poll(conn, now_iso, limit=budget)
 
     if not papers:
         logger.info("No papers due for citation polling")
         return 0
 
-    logger.info("Polling citations for %d papers", len(papers))
+    logger.info(
+        "Polling citations for %d papers (budget %d of %d total)",
+        len(papers), budget, total,
+    )
 
     paper_ids = [p["id"] for p in papers]
 
@@ -66,6 +71,7 @@ async def run_citation_poll(config: AppConfig, db_path: str) -> int:
             paper_ids,
             api_key=config.secrets.semantic_scholar_api_key or None,
             batch_size=config.citations.semantic_scholar_batch_size,
+            retry=config.retry,
         )
 
         # ----------------------------------------------------------
@@ -162,6 +168,7 @@ async def collect_citations_for_unpolled(config: AppConfig, db_path: str) -> int
             paper_ids,
             api_key=config.secrets.semantic_scholar_api_key or None,
             batch_size=config.citations.semantic_scholar_batch_size,
+            retry=config.retry,
         )
 
     with db.get_connection(db_path) as conn:

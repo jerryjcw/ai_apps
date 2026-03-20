@@ -149,9 +149,15 @@ class TestBaseTemplate:
 
 class TestPartialRoutes:
     def test_paper_rows_partial_returns_html(self, client):
-        resp = client.get("/partials/paper-rows")
+        resp = client.get("/partials/paper-rows", headers={"HX-Request": "true"})
         assert resp.status_code == 200
         assert "text/html" in resp.headers["content-type"]
+
+    def test_paper_rows_redirects_without_hx_header(self, client):
+        """Direct browser access to partial should redirect to full page."""
+        resp = client.get("/partials/paper-rows", follow_redirects=False)
+        assert resp.status_code == 302
+        assert resp.headers["location"] == "/papers"
 
     def test_trigger_rules_returns_html(self, client):
         resp = client.post("/partials/trigger-rules")
@@ -159,7 +165,10 @@ class TestPartialRoutes:
         assert "text/html" in resp.headers["content-type"]
 
     def test_paper_rows_accepts_query_params(self, client):
-        resp = client.get("/partials/paper-rows?q=test&status=active&sort=score&order=desc&page=2")
+        resp = client.get(
+            "/partials/paper-rows?q=test&status=active&sort=score&order=desc&page=2",
+            headers={"HX-Request": "true"},
+        )
         assert resp.status_code == 200
 
 

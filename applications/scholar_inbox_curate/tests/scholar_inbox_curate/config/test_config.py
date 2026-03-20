@@ -14,6 +14,7 @@ from src.config import (
     SecretsConfig,
     load_config,
 )
+from src.retry import RetryConfig
 
 
 class TestDefaultConfig:
@@ -30,6 +31,7 @@ class TestDefaultConfig:
         cfg = CitationConfig()
         assert cfg.semantic_scholar_batch_size == 100
         assert cfg.poll_schedule_cron == "0 6 * * 3"
+        assert cfg.poll_budget_fraction == 0.10
 
     def test_pruning_defaults(self):
         cfg = PruningConfig()
@@ -53,10 +55,18 @@ class TestDefaultConfig:
         assert cfg.scholar_inbox_password == ""
         assert cfg.semantic_scholar_api_key == ""
 
+    def test_retry_defaults(self):
+        cfg = RetryConfig()
+        assert cfg.max_attempts == 5
+        assert cfg.strategy == "exponential"
+        assert cfg.base_delay == 2.0
+        assert cfg.max_delay == 60.0
+
     def test_app_config_defaults(self):
         cfg = AppConfig()
         assert cfg.db_path == "data/scholar_curate.db"
         assert isinstance(cfg.ingestion, IngestionConfig)
+        assert isinstance(cfg.retry, RetryConfig)
 
     def test_frozen_dataclasses(self):
         cfg = IngestionConfig()
@@ -262,3 +272,77 @@ class TestConfigValidation:
             config_path=str(config_path), env_path=sample_env_file
         )
         assert config.ingestion.score_threshold == 1.0
+
+    def test_invalid_poll_budget_fraction_zero(self, tmp_path, sample_env_file):
+        config_path = tmp_path / "config.toml"
+        config_path.write_text("[citations]\npoll_budget_fraction = 0.0\n")
+        with pytest.raises(ConfigError, match="poll_budget_fraction"):
+            load_config(config_path=str(config_path), env_path=sample_env_file)
+
+    def test_invalid_poll_budget_fraction_negative(self, tmp_path, sample_env_file):
+        config_path = tmp_path / "config.toml"
+        config_path.write_text("[citations]\npoll_budget_fraction = -0.1\n")
+        with pytest.raises(ConfigError, match="poll_budget_fraction"):
+            load_config(config_path=str(config_path), env_path=sample_env_file)
+
+    def test_invalid_poll_budget_fraction_too_high(self, tmp_path, sample_env_file):
+        config_path = tmp_path / "config.toml"
+        config_path.write_text("[citations]\npoll_budget_fraction = 1.5\n")
+        with pytest.raises(ConfigError, match="poll_budget_fraction"):
+            load_config(config_path=str(config_path), env_path=sample_env_file)
+
+    def test_valid_poll_budget_fraction_one(self, tmp_path, sample_env_file):
+        """poll_budget_fraction=1.0 is valid (poll all papers)."""
+        config_path = tmp_path / "config.toml"
+        config_path.write_text("[citations]\npoll_budget_fraction = 1.0\n")
+        config = load_config(
+            config_path=str(config_path), env_path=sample_env_file
+        )
+        assert config.citations.poll_budget_fraction == 1.0
+
+    def test_invalid_retry_strategy(self, tmp_path, sample_env_file):
+        config_path = tmp_path / "config.toml"
+        config_path.write_text('[retry]\nstrategy = "linear"\n')
+        with pytest.raises(ConfigError, match="retry.strategy"):
+            load_config(config_path=str(config_path), env_path=sample_env_file)
+
+    def test_invalid_retry_max_attempts_zero(self, tmp_path, sample_env_file):
+        config_path = tmp_path / "config.toml"
+        config_path.write_text("[retry]\nmax_attempts = 0\n")
+        with pytest.raises(ConfigError, match="retry.max_attempts"):
+            load_config(config_path=str(config_path), env_path=sample_env_file)
+
+    def test_invalid_retry_base_delay_negative(self, tmp_path, sample_env_file):
+        config_path = tmp_path / "config.toml"
+        config_path.write_text("[retry]\nbase_delay = -1.0\n")
+        with pytest.raises(ConfigError, match="retry.base_delay"):
+            load_config(config_path=str(config_path), env_path=sample_env_file)
+
+    def test_retry_from_toml(self, tmp_path, sample_env_file):
+        """Retry config is loaded from [retry] section."""
+        config_content = """\
+[retry]
+strategy = "fixed"
+max_attempts = 3
+base_delay = 5.0
+max_delay = 30.0
+"""
+        config_path = tmp_path / "config.toml"
+        config_path.write_text(config_content)
+        config = load_config(
+            config_path=str(config_path), env_path=sample_env_file
+        )
+        assert config.retry.strategy == "fixed"
+        assert config.retry.max_attempts == 3
+        assert config.retry.base_delay == 5.0
+        assert config.retry.max_delay == 30.0
+
+    def test_retry_defaults_when_omitted(self, tmp_path, sample_env_file):
+        """When [retry] section is missing, defaults are used."""
+        config_path = tmp_path / "config.toml"
+        config_path.write_text("")
+        config = load_config(
+            config_path=str(config_path), env_path=sample_env_file
+        )
+        assert config.retry.strategy == "exponential"
+        assert config.retry.max_attempts == 5

@@ -13,6 +13,11 @@ from src.citations.semantic_scholar import (
     _to_s2_id,
     fetch_citations_batch,
 )
+from src.retry import RetryConfig
+
+# Zero-delay retry configs for fast tests
+_FAST_RETRY = RetryConfig(strategy="fixed", base_delay=0.0)
+_NO_RETRY = RetryConfig(max_attempts=1, strategy="fixed", base_delay=0.0)
 
 
 def _make_response(data, status_code=200):
@@ -41,6 +46,9 @@ class TestToS2Id:
     def test_s2_hash_passthrough(self):
         s2_id = "a1b2c3d4e5f6"
         assert _to_s2_id(s2_id) == s2_id
+
+    def test_si_prefix_returns_none(self):
+        assert _to_s2_id("si-12345") is None
 
     def test_empty_arxiv(self):
         assert _to_s2_id("arxiv:") == "ARXIV:"
@@ -168,27 +176,81 @@ class TestFetchCitationsBatch:
 
         result = await fetch_citations_batch(
             client, ["arxiv:123"], api_key="key", batch_size=100,
+            retry=_FAST_RETRY,
         )
         assert result == {"arxiv:123": 7}
         assert client.post.call_count == 2
 
     @pytest.mark.asyncio
+    async def test_429_multiple_retries(self):
+        """Should retry multiple 429s."""
+        error_response = httpx.Response(
+            429,
+            headers={"Retry-After": "0"},
+            request=httpx.Request("POST", "https://example.com"),
+        )
+        error = httpx.HTTPStatusError(
+            "429", request=error_response.request, response=error_response
+        )
+        success_data = [
+            {"paperId": "abc", "citationCount": 7, "externalIds": {}},
+        ]
+
+        client = AsyncMock(spec=httpx.AsyncClient)
+        client.post.side_effect = [error, error, error, _make_response(success_data)]
+
+        result = await fetch_citations_batch(
+            client, ["arxiv:123"], api_key="key", batch_size=100,
+            retry=_FAST_RETRY,
+        )
+        assert result == {"arxiv:123": 7}
+        assert client.post.call_count == 4
+
+    @pytest.mark.asyncio
     async def test_5xx_retry_then_skip(self):
-        """Should retry once on 5xx, then skip the batch."""
+        """Should retry on 5xx, then skip after all attempts exhausted."""
         error_response = httpx.Response(
             503, request=httpx.Request("POST", "https://example.com"),
         )
         error = httpx.HTTPStatusError(
             "503", request=error_response.request, response=error_response
         )
+        retry = RetryConfig(max_attempts=3, strategy="fixed", base_delay=0.0)
 
         client = AsyncMock(spec=httpx.AsyncClient)
-        client.post.side_effect = [error, error]
+        client.post.side_effect = [error] * 3
 
         result = await fetch_citations_batch(
             client, ["arxiv:123"], api_key="key", batch_size=100,
+            retry=retry,
         )
         assert result == {}
+        assert client.post.call_count == 3
+
+    @pytest.mark.asyncio
+    async def test_fixed_retry_strategy(self):
+        """Fixed strategy uses constant delay for every attempt."""
+        error_response = httpx.Response(
+            429,
+            headers={"Retry-After": "0"},
+            request=httpx.Request("POST", "https://example.com"),
+        )
+        error = httpx.HTTPStatusError(
+            "429", request=error_response.request, response=error_response
+        )
+        success_data = [
+            {"paperId": "abc", "citationCount": 1, "externalIds": {}},
+        ]
+        retry = RetryConfig(max_attempts=3, strategy="fixed", base_delay=0.0)
+
+        client = AsyncMock(spec=httpx.AsyncClient)
+        client.post.side_effect = [error, _make_response(success_data)]
+
+        result = await fetch_citations_batch(
+            client, ["arxiv:123"], api_key="key", batch_size=100,
+            retry=retry,
+        )
+        assert result == {"arxiv:123": 1}
 
     @pytest.mark.asyncio
     async def test_timeout_handling(self):
