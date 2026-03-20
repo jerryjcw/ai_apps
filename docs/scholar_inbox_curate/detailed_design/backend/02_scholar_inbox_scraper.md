@@ -42,17 +42,19 @@ from dataclasses import dataclass
 
 @dataclass
 class RawPaper:
+    """A paper as returned by the Scholar Inbox API, lightly parsed."""
     title: str
     authors: list[str]
     abstract: str
-    score: float                # ranking_score from API (0.0-1.0)
-    scholar_inbox_url: str      # URL on Scholar Inbox
-    arxiv_id: str | None        # From API response
-    semantic_scholar_id: str | None  # Already resolved by Scholar Inbox
-    paper_id: int               # Scholar Inbox internal ID
-    venue: str | None
-    year: int | None
-    category: str | None
+    score: float                           # ranking_score from API (0.0-1.0)
+    arxiv_id: str | None = None            # From API response
+    semantic_scholar_id: str | None = None  # Already resolved by Scholar Inbox
+    paper_id: int | None = None            # Scholar Inbox internal ID
+    venue: str | None = None
+    year: int | None = None
+    category: str | None = None
+    scholar_inbox_url: str | None = None   # URL to paper PDF
+    publication_date: str | None = None    # ISO 8601 (converted from epoch ms)
 ```
 
 ---
@@ -565,21 +567,10 @@ The page also contains a `react-daterange-picker` widget for date range selectio
 
 ## Error Handling
 
+All scraper exceptions are defined in `src/errors.py` (see [08 — Error Handling](08_error_handling_and_resilience.md)):
+
 ```python
-class ScraperError(Exception):
-    """Base exception for scraper errors."""
-
-class CloudflareTimeoutError(ScraperError):
-    """Cloudflare challenge or Turnstile CAPTCHA not solved within timeout."""
-
-class LoginError(ScraperError):
-    """Login to Scholar Inbox failed."""
-
-class SessionExpiredError(ScraperError):
-    """Saved cookies are no longer valid — manual re-auth required."""
-
-class APIError(ScraperError):
-    """Scholar Inbox API returned an unexpected response."""
+from src.errors import ScraperError, CloudflareTimeoutError, LoginError, SessionExpiredError, APIError
 ```
 
 The top-level `scrape_recommendations()` catches these and logs them, then records the failure in `ingestion_runs`.

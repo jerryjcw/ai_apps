@@ -55,8 +55,8 @@ from src.errors import ScholarCurateError, ConfigError, DatabaseError, ScraperEr
 | Error | Cause | Action |
 |-------|-------|--------|
 | 404 from S2 API | Paper not yet indexed | Use fallback ID, continue |
-| 429 from S2 API | Rate limit hit | Wait `Retry-After` seconds, retry once |
-| 5xx from S2 API | Server error | Retry once after 5s, then use fallback ID |
+| 429 from S2 API | Rate limit hit | Configurable retry via `RetryConfig` (default: exponential backoff, 5 attempts) |
+| 5xx from S2 API | Server error | Configurable retry via `RetryConfig` (default: exponential backoff, 5 attempts) |
 | Timeout | Slow API response | Use fallback ID, continue |
 | No title match | Search returned irrelevant results | Use fallback ID, log warning |
 
@@ -66,8 +66,8 @@ from src.errors import ScholarCurateError, ConfigError, DatabaseError, ScraperEr
 
 | Error | Cause | Action |
 |-------|-------|--------|
-| 429 from S2 batch API | Rate limit | Exponential backoff: 5s, 10s, 20s. Max 3 retries. |
-| 5xx from S2 batch API | Server error | Retry once after 10s. Skip batch if still failing. |
+| 429 from S2 batch API | Rate limit | Configurable retry via `RetryConfig` (default: exponential backoff, 5 attempts). Respects `Retry-After` header as minimum wait. |
+| 5xx from S2 batch API | Server error | Configurable retry via `RetryConfig` (default: exponential backoff, 5 attempts). Skip batch if all attempts exhausted. |
 | Partial null results | Some papers not found in batch | Skip those papers, update the rest |
 | OpenAlex 404 | Paper not in OpenAlex | Skip yearly breakdown, log debug |
 | OpenAlex timeout | Slow response | Skip, will retry next monthly cycle |
@@ -88,30 +88,42 @@ Rules operate entirely on local database data, so external failures don't apply.
 
 ## Retry Strategy
 
-### Simple Retry Decorator
+### Configurable Retry via `RetryConfig`
 
-The `retry_async` decorator is defined in `src/errors.py` for centralized error handling:
+All retry logic is centralised in `src/retry.py` through the `RetryConfig` dataclass, which supports two strategies:
 
 ```python
-def retry_async(max_retries: int = 1, delay: float = 5.0, backoff: float = 2.0):
-    """Decorator for async functions that retries on exception.
+from dataclasses import dataclass
+from typing import Literal
 
-    Args:
-        max_retries: Maximum number of retry attempts.
-        delay: Initial delay between retries in seconds.
-        backoff: Multiplier applied to delay after each retry.
-    """
-    # Implementation: exponential backoff with logging
+@dataclass(frozen=True)
+class RetryConfig:
+    max_attempts: int = 5                              # total attempts
+    strategy: Literal["fixed", "exponential"] = "exponential"
+    base_delay: float = 2.0                            # seconds
+    max_delay: float = 60.0                            # cap (exponential only)
+
+    def delay(self, attempt: int) -> float:
+        """Compute wait time for the given 0-based attempt.
+
+        Fixed:       base_delay (constant)
+        Exponential: min(base_delay * 2^attempt, max_delay) + jitter
+        """
 ```
 
-Usage:
+A default instance is defined in `src/constants.py`:
 
 ```python
-from src.errors import retry_async
+from src.retry import RetryConfig
 
-@retry_async(max_retries=2, delay=5.0, backoff=2.0)
-async def _fetch_batch(client, ids, headers):
-    ...
+DEFAULT_RETRY = RetryConfig()  # exponential, 5 attempts, 2s base, 60s cap
+```
+
+Both the single-paper resolver and the batch citation poller accept an optional `retry` parameter, defaulting to `DEFAULT_RETRY`. To switch to a fixed-delay strategy:
+
+```python
+fixed = RetryConfig(strategy="fixed", base_delay=5.0, max_attempts=3)
+await fetch_citations_batch(client, ids, api_key=key, retry=fixed)
 ```
 
 ---
@@ -129,6 +141,18 @@ If the S2 API is completely unreachable during a poll cycle:
 6. Next scheduled poll retries everything
 
 The system does not crash. It simply skips the cycle and tries again later.
+
+### Scenario: Semantic Scholar API Temporarily Down During Ingestion
+
+If the S2 API returns 5xx errors during paper resolution:
+1. Individual papers get fallback IDs (`title:{hash}`) and are stored in the DB
+2. The ingestion run completes successfully — scraping and storage are unaffected
+3. The date is recorded in `scraped_dates`, so backfill won't re-scrape it
+4. **Problem:** These "dangling" papers cannot be citation-polled
+5. **Self-healing:** The next `run_backfill()` call automatically runs re-resolution, which re-attempts S2 lookup for all dangling papers
+6. Once resolved, the paper gets a proper S2 ID and enters normal citation polling
+
+Similarly, backfill-ingested papers that lack a `semantic_scholar_id` get `si-{paper_id}` synthetic IDs. These are also picked up by re-resolution.
 
 ### Scenario: Scholar Inbox Down or Blocked
 

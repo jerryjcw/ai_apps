@@ -69,7 +69,7 @@ async def paper_list(
 ### Backend Functions Used
 
 - `list_papers(conn, status, search, sort_by, sort_order, limit, offset)` from `src/db.py` — returns filtered, sorted, paginated paper rows.
-- `count_papers(conn, status, search)` — counting companion to `list_papers` that returns the total matching count (needed for pagination). Searches across `title`, `authors`, and `abstract`.
+- `count_papers(conn, status, search)` — counting companion to `list_papers` that returns the total matching count (needed for pagination). Searches across `title`, `authors`, and `abstract`. Supports multi-word fuzzy search: each whitespace-separated word must match independently (AND logic), e.g. `"Diffusion Video"` matches papers containing both words anywhere in title, authors, or abstract.
 
 `count_papers` implementation:
 
@@ -87,9 +87,11 @@ def count_papers(conn, status: str | None = None, search: str | None = None) -> 
         params.append(status)
 
     if search is not None:
-        conditions.append("(title LIKE ? OR authors LIKE ? OR abstract LIKE ?)")
-        search_pattern = f"%{search}%"
-        params.extend([search_pattern, search_pattern, search_pattern])
+        words = search.split()
+        for word in words:
+            conditions.append("(title LIKE ? OR authors LIKE ? OR abstract LIKE ?)")
+            pattern = f"%{word}%"
+            params.extend([pattern, pattern, pattern])
 
     where_clause = ""
     if conditions:
@@ -201,98 +203,43 @@ async def paper_rows_partial(
 </form>
 
 <!-- Paper Table -->
-<div class="table-responsive">
-    <table>
-        <caption class="sr-only">Tracked papers</caption>
-        <thead>
-            <tr>
-                <th scope="col" {% if sort_by == 'title' %}aria-sort="{{ 'ascending' if sort_order == 'asc' else 'descending' }}"{% endif %}>
-                    <a href="#"
-                       hx-get="/partials/paper-rows"
-                       hx-vals='{"sort": "title", "order": "{{ 'asc' if sort_by == 'title' and sort_order == 'desc' else 'desc' }}", "page": "1"}'
-                       hx-target="#paper-table-body"
-                       hx-include="#paper-filters"
-                       hx-push-url="true">
-                        Title {% if sort_by == 'title' %}{{ '▲' if sort_order == 'asc' else '▼' }}{% endif %}
-                    </a>
-                </th>
-                <th scope="col">Authors</th>
-                <th scope="col" {% if sort_by == 'year' %}aria-sort="{{ 'ascending' if sort_order == 'asc' else 'descending' }}"{% endif %}>
-                    <a href="#"
-                       hx-get="/partials/paper-rows"
-                       hx-vals='{"sort": "year", "order": "{{ 'asc' if sort_by == 'year' and sort_order == 'desc' else 'desc' }}", "page": "1"}'
-                       hx-target="#paper-table-body"
-                       hx-include="#paper-filters"
-                       hx-push-url="true">
-                        Year {% if sort_by == 'year' %}{{ '▲' if sort_order == 'asc' else '▼' }}{% endif %}
-                    </a>
-                </th>
-                <th scope="col" {% if sort_by == 'scholar_inbox_score' %}aria-sort="{{ 'ascending' if sort_order == 'asc' else 'descending' }}"{% endif %}>
-                    <a href="#"
-                       hx-get="/partials/paper-rows"
-                       hx-vals='{"sort": "scholar_inbox_score", "order": "{{ 'asc' if sort_by == 'scholar_inbox_score' and sort_order == 'desc' else 'desc' }}", "page": "1"}'
-                       hx-target="#paper-table-body"
-                       hx-include="#paper-filters"
-                       hx-push-url="true">
-                        Score {% if sort_by == 'scholar_inbox_score' %}{{ '▲' if sort_order == 'asc' else '▼' }}{% endif %}
-                    </a>
-                </th>
-                <th scope="col" {% if sort_by == 'citation_count' %}aria-sort="{{ 'ascending' if sort_order == 'asc' else 'descending' }}"{% endif %}>
-                    <a href="#"
-                       hx-get="/partials/paper-rows"
-                       hx-vals='{"sort": "citation_count", "order": "{{ 'asc' if sort_by == 'citation_count' and sort_order == 'desc' else 'desc' }}", "page": "1"}'
-                       hx-target="#paper-table-body"
-                       hx-include="#paper-filters"
-                       hx-push-url="true">
-                        Citations {% if sort_by == 'citation_count' %}{{ '▲' if sort_order == 'asc' else '▼' }}{% endif %}
-                    </a>
-                </th>
-                <th scope="col" {% if sort_by == 'citation_velocity' %}aria-sort="{{ 'ascending' if sort_order == 'asc' else 'descending' }}"{% endif %}>
-                    <a href="#"
-                       hx-get="/partials/paper-rows"
-                       hx-vals='{"sort": "citation_velocity", "order": "{{ 'asc' if sort_by == 'citation_velocity' and sort_order == 'desc' else 'desc' }}", "page": "1"}'
-                       hx-target="#paper-table-body"
-                       hx-include="#paper-filters"
-                       hx-push-url="true">
-                        Velocity {% if sort_by == 'citation_velocity' %}{{ '▲' if sort_order == 'asc' else '▼' }}{% endif %}
-                    </a>
-                </th>
-                <th scope="col">Status</th>
-                <th scope="col">Category</th>
-                <th scope="col" {% if sort_by == 'ingested_at' %}aria-sort="{{ 'ascending' if sort_order == 'asc' else 'descending' }}"{% endif %}>
-                    <a href="#"
-                       hx-get="/partials/paper-rows"
-                       hx-vals='{"sort": "ingested_at", "order": "{{ 'asc' if sort_by == 'ingested_at' and sort_order == 'desc' else 'desc' }}", "page": "1"}'
-                       hx-target="#paper-table-body"
-                       hx-include="#paper-filters"
-                       hx-push-url="true">
-                        Ingested {% if sort_by == 'ingested_at' %}{{ '▲' if sort_order == 'asc' else '▼' }}{% endif %}
-                    </a>
-                </th>
-            </tr>
-        </thead>
-        <div id="paper-table-body">
-            {% include "papers/_rows.html" %}
-        </div>
-    </table>
+<div id="paper-table-body">
+    {% include "papers/_rows.html" %}
 </div>
 
 {% endblock %}
 ```
 
+**Key design decision:** The `<div id="paper-table-body">` is placed **outside** the `<table>` element (not inside it). The full table structure including `<thead>` lives in `_rows.html`, so column headers are preserved when HTMX swaps the partial.
+
 ---
 
 ## Partial Template: `src/web/templates/papers/_rows.html`
 
-This partial renders the `<tbody>` and pagination. It's used both for initial page load (included in `list.html`) and for HTMX updates.
+This partial renders the complete table (including `<thead>` with sort headers, `<tbody>` with rows) and pagination. It's used both for initial page load (included in `list.html`) and for HTMX updates. By including the full table structure, column headers are preserved across HTMX swaps.
 
 ```html
-<tbody>
+<div class="table-responsive">
+    <table>
+        <caption class="sr-only">Tracked papers</caption>
+        <thead>
+            <tr>
+                <!-- Sortable column headers with HTMX sort links -->
+                <th scope="col">
+                    <a href="#" hx-get="/partials/paper-rows" hx-vals='...' ...>
+                        Title {% if sort_by == 'title' %}{{ '▲' if sort_order == 'asc' else '▼' }}{% endif %}
+                    </a>
+                </th>
+                <th scope="col">Authors</th>
+                <!-- ... Year, Score, Citations, Velocity, Status, Category, Ingested ... -->
+            </tr>
+        </thead>
+        <tbody>
     {% if papers %}
         {% for paper in papers %}
         <tr>
             <td class="title-cell">
-                <a href="/papers/{{ paper.id }}">{{ paper.title|truncate(80) }}</a>
+                <a href="/papers/{{ paper.id }}" title="{{ paper.title }}">{{ paper.title|truncate(80) }}</a>
             </td>
             <td>{{ paper.authors|first_author }}</td>
             <td>{{ paper.year or '—' }}</td>
@@ -315,7 +262,9 @@ This partial renders the `<tbody>` and pagination. It's used both for initial pa
             </td>
         </tr>
     {% endif %}
-</tbody>
+        </tbody>
+    </table>
+</div>
 
 <!-- Pagination -->
 {% if total_pages > 1 %}
@@ -404,6 +353,13 @@ This partial renders the `<tbody>` and pagination. It's used both for initial pa
 - On full page load (`GET /papers?status=active&sort=year&order=asc&page=2`), query params are parsed by the route handler and used to set initial filter values in the template.
 - Bookmarking a filtered/sorted view works correctly.
 - Browser back button works because HTMX pushes URL state.
+
+### Partial Redirect on Direct Access
+
+Since `hx-push-url="true"` pushes the partial URL (`/partials/paper-rows?...`) into the browser address bar, a page refresh would load the bare partial without the base layout. To prevent this, the `/partials/paper-rows` endpoint checks for the `HX-Request` header:
+
+- **Present** (HTMX request): returns the partial template as normal.
+- **Absent** (direct browser load / refresh): redirects to `/papers` with the same query parameters, rendering the full page.
 
 ---
 

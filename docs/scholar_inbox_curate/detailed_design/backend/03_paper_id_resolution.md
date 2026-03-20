@@ -20,7 +20,7 @@ class ResolvedPaper:
     title: str
     authors: list[str]
     abstract: str
-    url: str
+    url: str | None
     arxiv_id: str | None
     doi: str | None
     venue: str | None
@@ -28,19 +28,25 @@ class ResolvedPaper:
     published_date: str | None  # ISO 8601
     citation_count: int         # Initial citation count from S2
     scholar_inbox_score: float
-    scholar_inbox_url: str
+    scholar_inbox_url: str | None
+    category: str | None = None
 
 
-async def resolve_paper(client: httpx.AsyncClient, raw: RawPaper) -> ResolvedPaper | None:
+async def resolve_paper(
+    client: httpx.AsyncClient,
+    raw: RawPaper,
+    config: AppConfig,
+) -> ResolvedPaper | None:
     """Resolve a single RawPaper to a ResolvedPaper via Semantic Scholar.
 
+    The config is needed to obtain the API key for rate limiting.
     Returns None if the paper cannot be found on Semantic Scholar.
     """
 
 async def resolve_papers(
     client: httpx.AsyncClient,
     papers: list[RawPaper],
-    batch_size: int = 10,
+    config: AppConfig,
 ) -> list[ResolvedPaper]:
     """Resolve a batch of RawPapers, with rate limiting between requests.
 
@@ -207,10 +213,12 @@ def _parse_s2_response(data: dict, raw: RawPaper) -> ResolvedPaper:
 
 ## Rate Limiting
 
-Semantic Scholar enforces rate limits. The resolver respects them:
+Semantic Scholar enforces rate limits. The resolver respects them with a pre-request delay and configurable retry on 429/5xx:
 
 ```python
 import asyncio
+from src.retry import RetryConfig
+from src.constants import DEFAULT_RETRY
 
 # Without API key: 1 request per second
 # With API key: 100 requests per second (use 10/sec to be safe)
@@ -222,21 +230,38 @@ async def _rate_limited_request(
     url: str,
     headers: dict,
     has_api_key: bool,
+    *,
+    retry: RetryConfig = DEFAULT_RETRY,
 ) -> httpx.Response:
-    """Make an API request with rate limiting."""
+    """Make an API request with rate limiting and configurable retry.
+
+    Retries on 429 and 5xx using the strategy defined by *retry*.
+    For 429 the Retry-After header is used as a minimum wait time.
+    """
     delay = RATE_LIMIT_DELAY_WITH_KEY if has_api_key else RATE_LIMIT_DELAY_NO_KEY
     await asyncio.sleep(delay)
 
-    response = await client.get(url, headers=headers, timeout=30.0)
-
-    if response.status_code == 429:
-        # Rate limited — back off and retry once
-        retry_after = int(response.headers.get("Retry-After", "5"))
-        logger.warning("Rate limited by Semantic Scholar, retrying in %ds", retry_after)
-        await asyncio.sleep(retry_after)
+    for attempt in range(retry.max_attempts):
         response = await client.get(url, headers=headers, timeout=30.0)
+        if response.status_code == 429:
+            wait = max(int(response.headers.get("Retry-After", "0")),
+                       retry.delay(attempt))
+            await asyncio.sleep(wait)
+            continue
+        if 500 <= response.status_code < 600:
+            await asyncio.sleep(retry.delay(attempt))
+            continue
+        return response
+    return response  # last error response
+```
 
-    return response
+### RetryConfig
+
+Retry behaviour is controlled by `RetryConfig` (see `src/retry.py`):
+
+```python
+RetryConfig(strategy="exponential")  # 2s, 4s, 8s, 16s … + jitter (default)
+RetryConfig(strategy="fixed", base_delay=5.0)  # 5s, 5s, 5s …
 ```
 
 ---
@@ -263,7 +288,80 @@ def _generate_fallback_id(raw: RawPaper) -> str:
     return f"title:{title_hash}"
 ```
 
-Papers with synthetic IDs will have limited citation tracking (only OpenAlex by title search), but they remain in the database and can be re-resolved later if Semantic Scholar indexes them.
+Papers with synthetic IDs cannot be citation-polled via the S2 batch API. They remain in the database and are automatically re-resolved by the backfill process (see below).
+
+---
+
+## Re-Resolution of Dangling Papers
+
+Papers stored with synthetic fallback IDs (`title:` or `si-` prefix) are considered "dangling" — they exist in the database but cannot participate in citation polling because:
+
+- `title:{hash}` IDs are explicitly skipped by `_to_s2_id()` in the citation poller
+- `si-{paper_id}` IDs (from backfill) are passed to S2 as-is but don't match any real S2 paper
+
+### Module: `src/ingestion/reresolver.py`
+
+The re-resolver finds these dangling papers and re-attempts Semantic Scholar resolution:
+
+```python
+@dataclass
+class ReResolveResult:
+    total_dangling: int = 0
+    resolved: int = 0
+    already_exists: int = 0
+    still_unresolved: int = 0
+    errors: list[str] = field(default_factory=list)
+
+
+async def re_resolve_dangling(config: AppConfig) -> ReResolveResult:
+    """Find and re-resolve papers with synthetic/fallback IDs.
+
+    Steps:
+    1. Query DB for papers with id LIKE 'title:%' OR id LIKE 'si-%'
+       AND resolve_failures < MAX_RESOLVE_FAILURES (default 3)
+    2. Reconstruct a RawPaper from the stored data (set semantic_scholar_id=None
+       to force re-resolution)
+    3. Call resolve_paper() to attempt S2 lookup via arXiv ID, DOI, or title search
+    4. If resolved to a real S2 ID:
+       a. Delete old row (ON DELETE CASCADE removes any snapshots)
+       b. Insert new row with resolved ID and enriched metadata
+       c. Reset resolve_failures to 0
+    5. If the resolved ID already exists in the DB, delete the dangling duplicate
+    6. On failure or unresolved: increment resolve_failures counter
+    7. Papers that reach MAX_RESOLVE_FAILURES are skipped in future runs
+       until the counter resets (next backfill cycle resets all counters)
+    """
+```
+
+### Failure Tracking
+
+Each dangling paper tracks a `resolve_failures` counter in the `papers` table:
+
+- **On resolution failure** (exception, no S2 match, or returned another synthetic ID): increment `resolve_failures`
+- **On success**: the old row is deleted and replaced, so the counter resets naturally
+- **Max failures**: Papers with `resolve_failures >= MAX_RESOLVE_FAILURES` (default 3) are skipped by `get_dangling_papers()`. This prevents the re-resolver from repeatedly hitting the S2 API for papers that are genuinely not indexed.
+- **Counter reset**: The `backfill` command resets all `resolve_failures` counters to 0 before running re-resolution, giving every paper a fresh set of attempts on each backfill cycle.
+
+### Integration with Backfill
+
+Re-resolution runs automatically at the end of every `run_backfill()` call. This means:
+
+- Papers that failed S2 resolution due to temporary API outages (5xx and 4xx) get another chance on the next daily backfill
+- Papers ingested via backfill with `si-` IDs get resolved to proper S2 IDs
+- No manual intervention required — the daily script handles it
+- Failure counters are reset at the start of each backfill, so papers get `MAX_RESOLVE_FAILURES` fresh attempts per backfill cycle
+
+### ID Replacement Strategy
+
+Since `id` is the primary key and `citation_snapshots` has `ON DELETE CASCADE`, replacement uses DELETE + INSERT within a single transaction. This is safe because dangling papers have no useful citation snapshots (they were never successfully polled).
+
+If the newly resolved ID already exists in the database (the paper was independently ingested through another path), the dangling duplicate is simply deleted.
+
+### CLI Command
+
+```
+scholar-curate re-resolve    # Re-attempt resolution for papers with fallback IDs
+```
 
 ---
 
@@ -316,7 +414,7 @@ This function is used by the orchestration layer to convert resolved papers into
 async def resolve_papers(
     client: httpx.AsyncClient,
     papers: list[RawPaper],
-    batch_size: int = 10,
+    config: AppConfig,
 ) -> list[ResolvedPaper]:
     """Resolve all scraped papers with progress logging.
 
@@ -338,7 +436,7 @@ async def resolve_papers(
 
         logger.info("Resolving paper %d/%d: %s", i + 1, len(papers), raw.title[:60])
 
-        result = await resolve_paper(client, raw)
+        result = await resolve_paper(client, raw, config)
 
         if result:
             resolved.append(result)
@@ -374,10 +472,11 @@ def _create_pre_resolved(raw: RawPaper) -> ResolvedPaper:
         doi=None,  # Will be enriched during citation polling via S2 batch API
         venue=raw.venue,
         year=raw.year,
-        published_date=None,  # Will be enriched during citation polling
+        published_date=raw.publication_date,  # From Scholar Inbox epoch ms → ISO 8601
         citation_count=0,
         scholar_inbox_score=raw.score,
         scholar_inbox_url=raw.scholar_inbox_url,
+        category=raw.category,
     )
 ```
 
@@ -385,9 +484,8 @@ def _create_pre_resolved(raw: RawPaper) -> ResolvedPaper:
 
 ## Error Handling
 
-- **HTTP errors (5xx):** Log and retry once after 5 seconds. If still failing, skip the paper.
+- **HTTP errors (429 / 5xx):** Retried using the configured `RetryConfig` strategy (default: exponential backoff with jitter, up to 5 attempts). If all attempts are exhausted, skip the paper and use a fallback ID.
 - **Timeout:** Log and skip.
 - **No results:** Use fallback ID.
-- **Rate limit (429):** Wait and retry as described above.
 
 All errors are logged but do not abort the full ingestion run — individual paper failures are tolerable.

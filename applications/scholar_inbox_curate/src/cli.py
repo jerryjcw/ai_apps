@@ -159,10 +159,31 @@ def backfill(ctx: click.Context, lookback: int | None, threshold: float | None) 
         run_backfill(config, lookback_days=lookback, score_threshold=threshold)
     )
 
-    click.echo(f"Dates checked:   {result.dates_checked}")
-    click.echo(f"Dates scraped:   {result.dates_scraped}")
-    click.echo(f"Papers found:    {result.total_papers_found}")
-    click.echo(f"Papers ingested: {result.total_papers_ingested}")
+    click.echo(f"Dates checked:     {result.dates_checked}")
+    click.echo(f"Dates scraped:     {result.dates_scraped}")
+    click.echo(f"Papers found:      {result.total_papers_found}")
+    click.echo(f"Papers ingested:   {result.total_papers_ingested}")
+    click.echo(f"Papers re-resolved: {result.papers_re_resolved}")
+    if result.errors:
+        click.echo(f"Errors ({len(result.errors)}):")
+        for err in result.errors:
+            click.echo(f"  - {err}")
+
+
+@cli.command("re-resolve")
+@click.pass_context
+def re_resolve(ctx: click.Context) -> None:
+    """Re-attempt S2 resolution for papers with fallback IDs."""
+    from src.ingestion.reresolver import re_resolve_dangling
+
+    config: AppConfig = ctx.obj["config"]
+    result = asyncio.run(re_resolve_dangling(config))
+    click.echo(f"Dangling papers:  {result.total_dangling}")
+    click.echo(f"Resolved:         {result.resolved}")
+    click.echo(f"Duplicates:       {result.already_exists}")
+    click.echo(f"Still unresolved: {result.still_unresolved}")
+    if result.skipped_max_failures > 0:
+        click.echo(f"Skipped (max failures): {result.skipped_max_failures}")
     if result.errors:
         click.echo(f"Errors ({len(result.errors)}):")
         for err in result.errors:

@@ -83,29 +83,44 @@ def _is_paper_due_for_poll(paper: dict, now: datetime) -> bool:
 This logic is implemented as a SQL query for efficiency, not Python-side filtering. The SQL version:
 
 ```sql
-SELECT * FROM papers
+SELECT *,
+    CASE
+        WHEN last_cited_check IS NULL THEN 1e9
+        ELSE (julianday(:now) - julianday(last_cited_check))
+             / CASE
+                 WHEN status = 'promoted' THEN 30.0
+                 WHEN julianday(:now) - julianday(ingested_at) < 91 THEN 7.0
+                 WHEN julianday(:now) - julianday(ingested_at) < 365 THEN 14.0
+                 ELSE 30.0
+               END
+    END AS overdue_ratio
+FROM papers
 WHERE status != 'pruned'
 AND (
     last_cited_check IS NULL
     OR (
         status = 'promoted'
-        AND julianday('now') - julianday(last_cited_check) >= 30
+        AND last_cited_check <= datetime(:now, '-30 days')
     )
     OR (
-        julianday('now') - julianday(COALESCE(published_date, ingested_at)) < 90
-        AND julianday('now') - julianday(last_cited_check) >= 7
+        julianday(:now) - julianday(ingested_at) < 91
+        AND last_cited_check <= datetime(:now, '-7 days')
     )
     OR (
-        julianday('now') - julianday(COALESCE(published_date, ingested_at)) BETWEEN 90 AND 365
-        AND julianday('now') - julianday(last_cited_check) >= 14
+        julianday(:now) - julianday(ingested_at) >= 91
+        AND julianday(:now) - julianday(ingested_at) < 365
+        AND last_cited_check <= datetime(:now, '-14 days')
     )
     OR (
-        julianday('now') - julianday(COALESCE(published_date, ingested_at)) > 365
-        AND julianday('now') - julianday(last_cited_check) >= 30
+        julianday(:now) - julianday(ingested_at) >= 365
+        AND last_cited_check <= datetime(:now, '-30 days')
     )
 )
-ORDER BY last_cited_check ASC NULLS FIRST;
+ORDER BY overdue_ratio DESC
+LIMIT :limit;  -- NULL means no limit
 ```
+
+> **Note:** The query uses `ingested_at` (not `published_date`) for age determination, and accepts `:now` as a parameter for deterministic testing rather than using `'now'`. The `overdue_ratio` column orders papers so the most overdue are polled first, and the optional `LIMIT` enables budget-based polling.
 
 ---
 
@@ -176,11 +191,13 @@ def _to_s2_id(paper_id: str) -> str | None:
         return f"ARXIV:{paper_id[6:]}"
     elif paper_id.startswith("doi:"):
         return f"DOI:{paper_id[4:]}"
-    elif paper_id.startswith("title:"):
-        return None  # Cannot batch-lookup by title hash
+    elif paper_id.startswith("title:") or paper_id.startswith("si-"):
+        return None  # Cannot batch-lookup by title hash or Scholar Inbox internal ID
     else:
         return paper_id  # Assume it's a native S2 paperId
 ```
+
+> **Note:** Papers with `title:` or `si-` prefix IDs are skipped during citation polling. These "dangling" papers are automatically re-resolved to proper S2 IDs by the backfill process (see doc 03 — Re-Resolution of Dangling Papers).
 
 ### Rate Limiting
 
@@ -195,8 +212,10 @@ Between each batch request, wait the appropriate delay.
 
 ### Error Recovery
 
-- **429 Rate Limit:** Exponential backoff (5s, 10s, 20s), max 3 retries.
-- **5xx Server Error:** Retry once after 10 seconds. If still failing, log and skip the batch.
+Error recovery uses the configurable `RetryConfig` from `src/retry.py` (see doc 08). The default `DEFAULT_RETRY` configuration provides exponential backoff with jitter, 5 attempts, 2s base delay capped at 60s. A fixed-delay strategy is also available.
+
+- **429 Rate Limit:** Retry using the configured strategy. The `Retry-After` header is used as a minimum wait time.
+- **5xx Server Error:** Retry using the configured strategy. Skip the batch if all attempts are exhausted.
 - **Partial results:** If some IDs in a batch return null, those papers are skipped for this cycle. They'll be retried on the next poll.
 
 ---
@@ -291,13 +310,16 @@ async def run_citation_poll(config: AppConfig, db_path: str) -> int:
     now = now_utc()
 
     with get_connection(db_path) as conn:
-        papers = get_papers_due_for_poll(conn, now)
+        # Budget-based polling: cap each cycle to a fraction of non-pruned papers
+        total = count_non_pruned_papers(conn)
+        budget = max(1, int(total * config.citations.poll_budget_fraction))
+        papers = get_papers_due_for_poll(conn, now, limit=budget)
 
     if not papers:
         logger.info("No papers due for citation polling")
         return 0
 
-    logger.info("Polling citations for %d papers", len(papers))
+    logger.info("Polling citations for %d papers (budget %d of %d)", len(papers), budget, total)
 
     async with httpx.AsyncClient() as client:
         # 1. Batch fetch from Semantic Scholar
@@ -359,12 +381,52 @@ async def run_citation_poll(config: AppConfig, db_path: str) -> int:
 
 ---
 
+## Budget-Based Polling
+
+With a growing database, polling all eligible papers in every cycle can cause excessive Semantic Scholar API usage. Budget-based polling caps each cycle to a configurable fraction of the total non-pruned papers.
+
+### Configuration
+
+```toml
+[citations]
+poll_budget_fraction = 0.10  # Poll at most 10% of non-pruned papers per cycle
+```
+
+### Budget Computation
+
+```python
+total = count_non_pruned_papers(conn)
+budget = max(1, int(total * config.citations.poll_budget_fraction))
+papers = get_papers_due_for_poll(conn, now, limit=budget)
+```
+
+The minimum budget is 1 (even with very few papers).
+
+### Overdue Ratio Prioritization
+
+Papers are ordered by their *overdue ratio* = `days_since_last_check / scheduled_interval`:
+
+- **Never-polled papers** sort first (assigned ratio `1e9`)
+- Among polled papers, **higher ratio = more overdue** relative to schedule
+- **Starvation prevention**: a monthly paper 60 days overdue (ratio 2.0) outranks a weekly paper 8 days overdue (ratio 1.14). Every paper's ratio climbs over time, guaranteeing eventual selection.
+
+### Scope
+
+- `run_citation_poll()` is budget-limited (periodic polling)
+- `collect_citations_for_unpolled()` is **not** budget-limited (initial one-time collection for backfilled papers)
+
+---
+
 ## Handling Papers with Fallback IDs
 
-Papers with `title:{hash}` IDs cannot use the Semantic Scholar batch API. For these:
+Papers with `title:{hash}` or `si-{paper_id}` IDs cannot use the Semantic Scholar batch API and are skipped during citation polling.
 
-1. Attempt a title search on Semantic Scholar (single-paper endpoint) — if found, **update the paper's ID** in the database to the real `paperId`.
-2. If not found on S2, try OpenAlex by title.
-3. If neither works, skip this paper and try again next cycle.
+These "dangling" papers are handled by the **re-resolution mechanism** (see doc 03), which runs automatically at the end of each backfill execution:
 
-This self-healing mechanism means that papers initially missed by S2 get resolved once they appear in the index.
+1. Query the DB for papers with `title:` or `si-` prefix IDs
+2. Re-attempt Semantic Scholar resolution (arXiv ID, DOI, or title search)
+3. If resolved, replace the synthetic ID with the real S2 `paperId` in the database
+4. If the resolved ID already exists, delete the dangling duplicate
+5. If still unresolved, the paper remains and will be retried on the next backfill
+
+This self-healing mechanism means that papers initially missed by S2 (due to temporary API outages or indexing delays) get resolved automatically once they appear in the S2 index.

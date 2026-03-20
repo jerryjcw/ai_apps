@@ -7,6 +7,7 @@ import tomllib
 from dotenv import load_dotenv
 
 from src.errors import ConfigError
+from src.retry import RetryConfig
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +24,7 @@ class IngestionConfig:
 class CitationConfig:
     semantic_scholar_batch_size: int = 100
     poll_schedule_cron: str = "0 6 * * 3"
+    poll_budget_fraction: float = 0.10
 
 
 @dataclass(frozen=True)
@@ -59,6 +61,7 @@ class AppConfig:
     promotion: PromotionConfig = field(default_factory=PromotionConfig)
     browser: BrowserConfig = field(default_factory=BrowserConfig)
     secrets: SecretsConfig = field(default_factory=SecretsConfig)
+    retry: RetryConfig = field(default_factory=RetryConfig)
     db_path: str = "data/scholar_curate.db"
 
 
@@ -98,6 +101,28 @@ def _validate_config(config: AppConfig) -> None:
             f"got {config.citations.semantic_scholar_batch_size}"
         )
 
+    if not (0.0 < config.citations.poll_budget_fraction <= 1.0):
+        raise ConfigError(
+            f"poll_budget_fraction must be between 0.0 (exclusive) and 1.0 (inclusive), "
+            f"got {config.citations.poll_budget_fraction}"
+        )
+
+    if config.retry.strategy not in ("fixed", "exponential"):
+        raise ConfigError(
+            f"retry.strategy must be 'fixed' or 'exponential', "
+            f"got '{config.retry.strategy}'"
+        )
+
+    if config.retry.max_attempts < 1:
+        raise ConfigError(
+            f"retry.max_attempts must be >= 1, got {config.retry.max_attempts}"
+        )
+
+    if config.retry.base_delay < 0:
+        raise ConfigError(
+            f"retry.base_delay must be >= 0, got {config.retry.base_delay}"
+        )
+
     if not config.secrets.scholar_inbox_email:
         logger.warning(
             "SCHOLAR_INBOX_EMAIL not set — ingestion commands will fail"
@@ -128,6 +153,7 @@ def load_config(
     pruning = PruningConfig(**toml_data.get("pruning", {}))
     promotion = PromotionConfig(**toml_data.get("promotion", {}))
     browser = BrowserConfig(**toml_data.get("browser", {}))
+    retry = RetryConfig(**toml_data.get("retry", {}))
 
     secrets = SecretsConfig(
         scholar_inbox_email=os.getenv("SCHOLAR_INBOX_EMAIL", ""),
@@ -144,6 +170,7 @@ def load_config(
         promotion=promotion,
         browser=browser,
         secrets=secrets,
+        retry=retry,
         db_path=db_path,
     )
 

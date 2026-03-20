@@ -52,14 +52,17 @@ velocity_threshold = 10.0
 The web UI is the primary interface for browsing papers and triggering operations.
 
 ```bash
-# Web UI only (no scheduler)
-.venv/bin/scholar-curate --config config.toml serve
+# Activate the virtual environment first
+source .venv/bin/activate
 
-# Web UI + automated scheduler together
-.venv/bin/scholar-curate --config config.toml run --with-web
+# Start the web UI (default: http://127.0.0.1:8000)
+scholar-curate serve
 
 # Custom host/port
-.venv/bin/scholar-curate --config config.toml serve --host 0.0.0.0 --port 8080
+scholar-curate serve --host 0.0.0.0 --port 8080
+
+# With verbose logging
+scholar-curate -v serve
 ```
 
 Then open **http://127.0.0.1:8000** in your browser.
@@ -114,29 +117,15 @@ scholar-curate stats
 
 ### Workflow 1: Daily Paper Curation
 
-Run this daily to keep your paper database fresh:
+A ready-to-use script is provided at `scripts/daily_update.sh`. It runs a full daily pass: backfill missed dates (last 30 days), ingest today's recommendations, poll citations, and apply prune/promote rules.
 
 ```bash
-#!/bin/bash
-# daily_update.sh
+# Run directly
+./scripts/daily_update.sh
 
-# 1. Ingest today's recommendations from Scholar Inbox
-scholar-curate ingest
-echo "✓ Ingested today's recommendations"
-
-# 2. Get latest citation counts
-scholar-curate get-citations
-echo "✓ Updated citation counts"
-
-# 3. Apply rules (prune old/unpopular papers, promote trending ones)
-scholar-curate update-status
-echo "✓ Applied pruning and promotion rules"
-
-# 4. View dashboard
-scholar-curate stats
+# Or via cron
+0 9 * * * /path/to/applications/scholar_inbox_curate/scripts/daily_update.sh >> /tmp/scholar_curate.log 2>&1
 ```
-
-**Frequency**: Daily (e.g., via cron: `0 9 * * * cd ~/ai_apps/applications/scholar_inbox_curate && ./daily_update.sh`)
 
 ### Workflow 2: Initial Backfill
 
@@ -279,11 +268,12 @@ The application uses SQLite with WAL mode for better concurrency. Database locat
 
 ### Schema Versioning
 
-The database uses SQLite's `PRAGMA user_version` for schema management. Current schema version: **3**
+The database uses SQLite's `PRAGMA user_version` for schema management. Current schema version: **4**
 
 **Migrations** are applied automatically on startup:
 - **V1→V2**: Adds `scraped_dates` table (for backfill gap detection) and `digest_date` column in `papers`
 - **V2→V3**: Adds `doi` column to `papers` table
+- **V3→V4**: Adds `category` column to `papers` table (Scholar Inbox topic category)
 
 ## Development
 
@@ -303,6 +293,9 @@ pytest tests/ --cov=src --cov-report=html
 ### Project Structure
 
 ```
+scripts/
+└── daily_update.sh        # Daily cron script (backfill + ingest + citations + rules)
+
 src/
 ├── config.py              # Configuration management
 ├── constants.py           # Application constants

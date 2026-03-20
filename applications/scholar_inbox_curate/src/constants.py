@@ -4,7 +4,13 @@
 # Database
 # ---------------------------------------------------------------------------
 
-CURRENT_SCHEMA_VERSION = 4
+CURRENT_SCHEMA_VERSION = 5
+
+# ---------------------------------------------------------------------------
+# Re-resolution
+# ---------------------------------------------------------------------------
+
+MAX_RESOLVE_FAILURES = 3  # skip paper after this many consecutive failures
 
 # ---------------------------------------------------------------------------
 # Scholar Inbox API
@@ -24,13 +30,22 @@ S2_FIELDS = (
     "publicationDate,externalIds,citationCount,url"
 )
 RATE_LIMIT_DELAY_NO_KEY = 1.1   # seconds – unauthenticated
-RATE_LIMIT_DELAY_WITH_KEY = 0.1  # seconds – with API key
+RATE_LIMIT_DELAY_WITH_KEY = 1.0  # seconds – with API key
 
 # ---------------------------------------------------------------------------
 # Resolver
 # ---------------------------------------------------------------------------
 
 SIMILARITY_THRESHOLD = 0.85
+
+# ---------------------------------------------------------------------------
+# Retry
+# ---------------------------------------------------------------------------
+
+# Import here so consumers can do ``from src.constants import DEFAULT_RETRY``
+from src.retry import RetryConfig  # noqa: E402
+
+DEFAULT_RETRY = RetryConfig()  # exponential, 5 attempts, 2s base, 60s cap
 
 # ---------------------------------------------------------------------------
 # Semantic Scholar Batch API (Citation Polling)

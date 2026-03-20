@@ -224,6 +224,7 @@ This keeps API usage low while still catching early citation spikes.
 - Fields: `citationCount`, `externalIds`
 - Rate limit: 100 requests/second with API key (1 req/sec without)
 - Used for: total citation count on every poll
+- Budget-based polling: each cycle polls at most `poll_budget_fraction` (default 10%) of non-pruned papers, prioritized by overdue ratio to prevent starvation
 
 **Secondary: OpenAlex API**
 
@@ -329,8 +330,9 @@ scholar_inbox_curate/
 │   │   ├── __init__.py
 │   │   ├── scraper.py        # Scholar Inbox API client (httpx + Playwright auth)
 │   │   ├── resolver.py       # Resolve paper IDs via Semantic Scholar
+│   │   ├── reresolver.py     # Re-resolve dangling papers with fallback IDs
 │   │   ├── orchestrate.py    # Ingestion orchestration (shared by CLI and web)
-│   │   └── backfill.py       # Gap detection and backfill logic
+│   │   └── backfill.py       # Gap detection, backfill, and dangling paper re-resolution
 │   ├── citations/
 │   │   ├── __init__.py
 │   │   ├── semantic_scholar.py
@@ -355,15 +357,16 @@ scholar_inbox_curate/
 ## CLI Commands
 
 ```
-scholar-curate ingest         # Run paper ingestion now
-scholar-curate backfill       # Scrape missed digest dates within lookback window
-scholar-curate poll-citations      # Run citation polling now
-scholar-curate collect-citations   # Collect citation data for never-polled papers
-scholar-curate prune          # Run prune/promote rules now
-scholar-curate serve          # Start the web UI (FastAPI)
-scholar-curate run            # Start scheduler (ingest + poll on cron)
-scholar-curate stats          # Print DB summary (paper counts by status)
-scholar-curate grab-session   # Extract session cookie from Chrome browser
-scholar-curate login          # Launch headed browser for manual Turnstile auth
-scholar-curate reset-session  # Delete cookies + browser profile, then re-auth
+scholar-curate ingest            # Run paper ingestion now
+scholar-curate backfill          # Scrape missed digest dates + re-resolve dangling papers
+scholar-curate re-resolve        # Re-attempt S2 resolution for papers with fallback IDs
+scholar-curate poll-citations    # Run citation polling now
+scholar-curate collect-citations # Collect citation data for never-polled papers
+scholar-curate prune             # Run prune/promote rules now
+scholar-curate serve             # Start the web UI (FastAPI)
+scholar-curate run               # Start scheduler (ingest + poll on cron)
+scholar-curate stats             # Print DB summary (paper counts by status)
+scholar-curate grab-session      # Extract session cookie from Chrome browser
+scholar-curate login             # Launch headed browser for manual Turnstile auth
+scholar-curate reset-session     # Delete cookies + browser profile, then re-auth
 ```

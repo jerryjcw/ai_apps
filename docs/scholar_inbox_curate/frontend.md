@@ -98,7 +98,8 @@ A full table of all tracked papers with filtering and sorting.
 
 **HTMX behavior:**
 
-- Filter/sort changes trigger `hx-get="/partials/paper-rows"` to swap the table body without full page reload.
+- Filter/sort changes trigger `hx-get="/partials/paper-rows"` to swap the table body without full page reload. Direct browser access to the partial endpoint (e.g., on refresh) redirects to `/papers` with the same query params.
+- Search supports multi-word fuzzy matching (e.g., "Diffusion Video" matches papers containing both words).
 - Default sort: velocity descending.
 
 ---

@@ -138,6 +138,13 @@ def _register_routes(app: FastAPI, templates: Jinja2Templates) -> None:
         order: str = "desc",
         page: int = 1,
     ):
+        # Direct browser load (refresh) — redirect to the full page
+        if "hx-request" not in request.headers:
+            params = request.query_params
+            qs = str(params) if params else ""
+            url = f"/papers?{qs}" if qs else "/papers"
+            return RedirectResponse(url=url, status_code=302)
+
         from src.web.routes.papers import render_paper_rows_partial
 
         db_path = request.app.state.db_path
