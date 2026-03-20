@@ -16,6 +16,7 @@ from difflib import SequenceMatcher
 import httpx
 
 from src.constants import (
+    DEFAULT_RETRY,
     RATE_LIMIT_DELAY_NO_KEY,
     RATE_LIMIT_DELAY_WITH_KEY,
     S2_BASE_URL,
@@ -23,6 +24,7 @@ from src.constants import (
     SIMILARITY_THRESHOLD,
 )
 from src.ingestion.scraper import RawPaper
+from src.retry import RetryConfig
 
 logger = logging.getLogger(__name__)
 
@@ -111,20 +113,46 @@ async def _rate_limited_request(
     has_api_key: bool,
     *,
     params: dict | None = None,
+    retry: RetryConfig = DEFAULT_RETRY,
 ) -> httpx.Response:
-    """Make an API request with rate limiting and 429 retry."""
+    """Make an API request with rate limiting and configurable retry.
+
+    Retries on 429 (rate limit) and 5xx (server error) using the strategy
+    defined by *retry*.  For 429 the ``Retry-After`` header is used as a
+    minimum wait time.
+    """
     delay = RATE_LIMIT_DELAY_WITH_KEY if has_api_key else RATE_LIMIT_DELAY_NO_KEY
     await asyncio.sleep(delay)
 
-    response = await client.get(url, headers=headers, params=params, timeout=30.0)
-
-    if response.status_code == 429:
-        retry_after = int(response.headers.get("Retry-After", "5"))
-        logger.warning("Rate limited by Semantic Scholar, retrying in %ds", retry_after)
-        await asyncio.sleep(retry_after)
+    last_response: httpx.Response | None = None
+    for attempt in range(retry.max_attempts):
         response = await client.get(url, headers=headers, params=params, timeout=30.0)
 
-    return response
+        if response.status_code == 429:
+            retry_after = int(response.headers.get("Retry-After", "0"))
+            wait = max(retry_after, retry.delay(attempt))
+            logger.warning(
+                "Rate limited (429), attempt %d/%d, retrying in %.1fs",
+                attempt + 1, retry.max_attempts, wait,
+            )
+            await asyncio.sleep(wait)
+            last_response = response
+            continue
+
+        if 500 <= response.status_code < 600:
+            wait = retry.delay(attempt)
+            logger.warning(
+                "Server error %d, attempt %d/%d, retrying in %.1fs",
+                response.status_code, attempt + 1, retry.max_attempts, wait,
+            )
+            await asyncio.sleep(wait)
+            last_response = response
+            continue
+
+        return response
+
+    # All attempts exhausted — return the last error response
+    return last_response  # type: ignore[return-value]
 
 
 # ---------------------------------------------------------------------------
@@ -264,6 +292,7 @@ async def _resolve_by_arxiv(
     raw: RawPaper,
     headers: dict,
     has_api_key: bool,
+    retry: RetryConfig = DEFAULT_RETRY,
 ) -> ResolvedPaper | None:
     """Try to resolve a paper by its arXiv ID."""
     if not raw.arxiv_id:
@@ -272,17 +301,12 @@ async def _resolve_by_arxiv(
     url = f"{S2_BASE_URL}/paper/ARXIV:{raw.arxiv_id}"
     try:
         resp = await _rate_limited_request(
-            client, url, headers, has_api_key, params={"fields": S2_FIELDS}
+            client, url, headers, has_api_key,
+            params={"fields": S2_FIELDS}, retry=retry,
         )
         if resp.status_code == 404:
             logger.debug("arXiv ID %s not found on S2", raw.arxiv_id)
             return None
-        if resp.status_code >= 500:
-            logger.warning("S2 server error %d for arXiv:%s, retrying once", resp.status_code, raw.arxiv_id)
-            await asyncio.sleep(5)
-            resp = await client.get(url, headers=headers, params={"fields": S2_FIELDS}, timeout=30.0)
-            if not resp.is_success:
-                return None
         resp.raise_for_status()
         return _parse_s2_response(resp.json(), raw)
     except (httpx.HTTPError, KeyError, ValueError) as exc:
@@ -296,39 +320,18 @@ async def _resolve_by_doi(
     doi: str,
     headers: dict,
     has_api_key: bool,
+    retry: RetryConfig = DEFAULT_RETRY,
 ) -> ResolvedPaper | None:
-    """Try to resolve a paper by its DOI.
-
-    Parameters
-    ----------
-    client : httpx.AsyncClient
-    raw : RawPaper
-    doi : str
-        The DOI string (without "DOI:" prefix)
-    headers : dict
-        Request headers including API key if available
-    has_api_key : bool
-        Whether the API key is set (affects rate limiting)
-
-    Returns
-    -------
-    ResolvedPaper | None
-        Resolved paper if found, None otherwise
-    """
+    """Try to resolve a paper by its DOI."""
     url = f"{S2_BASE_URL}/paper/DOI:{doi}"
     try:
         resp = await _rate_limited_request(
-            client, url, headers, has_api_key, params={"fields": S2_FIELDS}
+            client, url, headers, has_api_key,
+            params={"fields": S2_FIELDS}, retry=retry,
         )
         if resp.status_code == 404:
             logger.debug("DOI %s not found on S2", doi)
             return None
-        if resp.status_code >= 500:
-            logger.warning("S2 server error %d for DOI:%s, retrying once", resp.status_code, doi)
-            await asyncio.sleep(5)
-            resp = await client.get(url, headers=headers, params={"fields": S2_FIELDS}, timeout=30.0)
-            if not resp.is_success:
-                return None
         resp.raise_for_status()
         return _parse_s2_response(resp.json(), raw)
     except (httpx.HTTPError, KeyError, ValueError) as exc:
@@ -341,6 +344,7 @@ async def _resolve_by_title(
     raw: RawPaper,
     headers: dict,
     has_api_key: bool,
+    retry: RetryConfig = DEFAULT_RETRY,
 ) -> ResolvedPaper | None:
     """Try to resolve a paper by title search + fuzzy matching."""
     url = f"{S2_BASE_URL}/paper/search"
@@ -348,14 +352,9 @@ async def _resolve_by_title(
 
     try:
         resp = await _rate_limited_request(
-            client, url, headers, has_api_key, params=params
+            client, url, headers, has_api_key,
+            params=params, retry=retry,
         )
-        if resp.status_code >= 500:
-            logger.warning("S2 server error %d for title search, retrying once", resp.status_code)
-            await asyncio.sleep(5)
-            resp = await client.get(url, headers=headers, params=params, timeout=30.0)
-            if not resp.is_success:
-                return None
         resp.raise_for_status()
 
         data = resp.json()
@@ -393,22 +392,21 @@ async def resolve_paper(
     """
     headers = _get_headers(config)
     has_api_key = bool(config.secrets.semantic_scholar_api_key)
+    retry = getattr(config, "retry", DEFAULT_RETRY)
 
     # Strategy 1: arXiv ID (most reliable)
-    result = await _resolve_by_arxiv(client, raw, headers, has_api_key)
+    result = await _resolve_by_arxiv(client, raw, headers, has_api_key, retry)
     if result:
         return result
 
     # Strategy 2: DOI (if available from Scholar Inbox metadata)
-    # Note: Most Scholar Inbox papers don't have DOI, but attempt if we find one
-    # This can be extended if we extract DOI from paper metadata
     if hasattr(raw, 'doi') and raw.doi:
-        result = await _resolve_by_doi(client, raw, raw.doi, headers, has_api_key)
+        result = await _resolve_by_doi(client, raw, raw.doi, headers, has_api_key, retry)
         if result:
             return result
 
     # Strategy 3: title search (fallback)
-    result = await _resolve_by_title(client, raw, headers, has_api_key)
+    result = await _resolve_by_title(client, raw, headers, has_api_key, retry)
     if result:
         return result
 

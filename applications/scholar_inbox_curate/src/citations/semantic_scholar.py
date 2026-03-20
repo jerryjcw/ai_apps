@@ -12,11 +12,13 @@ import logging
 import httpx
 
 from src.constants import (
+    DEFAULT_RETRY,
     S2_BATCH_DELAY_NO_KEY,
     S2_BATCH_DELAY_WITH_KEY,
     S2_BATCH_FIELDS,
     S2_BATCH_URL,
 )
+from src.retry import RetryConfig
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +40,7 @@ def _to_s2_id(paper_id: str) -> str | None:
         return "ARXIV:" + paper_id[len("arxiv:"):]
     if paper_id.startswith("doi:"):
         return "DOI:" + paper_id[len("doi:"):]
-    if paper_id.startswith("title:"):
+    if paper_id.startswith("title:") or paper_id.startswith("si-"):
         return None
     return paper_id
 
@@ -85,6 +87,7 @@ async def fetch_citations_batch(
     paper_ids: list[str],
     api_key: str | None = None,
     batch_size: int = 100,
+    retry: RetryConfig = DEFAULT_RETRY,
 ) -> dict[str, int]:
     """Fetch citation counts for a list of paper IDs.
 
@@ -97,6 +100,8 @@ async def fetch_citations_batch(
         Optional Semantic Scholar API key for higher rate limits.
     batch_size : int
         Maximum IDs per batch request (S2 limit is 500).
+    retry : RetryConfig
+        Retry strategy for transient errors.
 
     Returns
     -------
@@ -124,7 +129,7 @@ async def fetch_citations_batch(
             await asyncio.sleep(delay)
 
         try:
-            batch_results = await _try_fetch_batch(client, s2_ids, headers, delay)
+            batch_results = await _try_fetch_batch(client, s2_ids, headers, retry)
         except Exception as exc:
             logger.error("Batch fetch failed: %s", exc)
             continue
@@ -140,27 +145,34 @@ async def _try_fetch_batch(
     client: httpx.AsyncClient,
     s2_ids: list[str],
     headers: dict,
-    delay: float,
+    retry: RetryConfig = DEFAULT_RETRY,
 ) -> list[dict | None]:
-    """Attempt a batch fetch with retry logic for 429 and 5xx errors."""
-    try:
-        return await _fetch_batch(client, s2_ids, headers)
-    except httpx.HTTPStatusError as exc:
-        status = exc.response.status_code
-        if status == 429:
-            retry_after = int(exc.response.headers.get("Retry-After", "5"))
-            logger.warning("Rate limited (429), retrying in %ds", retry_after)
-            await asyncio.sleep(retry_after)
+    """Attempt a batch fetch with configurable retry on 429 and 5xx errors."""
+    for attempt in range(retry.max_attempts):
+        try:
             return await _fetch_batch(client, s2_ids, headers)
-        if 500 <= status < 600:
-            logger.warning("Server error %d, retrying once after %gs", status, delay)
-            await asyncio.sleep(delay)
-            try:
-                return await _fetch_batch(client, s2_ids, headers)
-            except Exception:
-                logger.error("Retry failed for 5xx, skipping batch")
-                return [None] * len(s2_ids)
-        raise
-    except httpx.TimeoutException:
-        logger.warning("Batch request timed out, skipping batch")
-        return [None] * len(s2_ids)
+        except httpx.HTTPStatusError as exc:
+            status = exc.response.status_code
+            if status == 429:
+                retry_after = int(exc.response.headers.get("Retry-After", "0"))
+                wait = max(retry_after, retry.delay(attempt))
+                logger.warning(
+                    "Rate limited (429), attempt %d/%d, retrying in %.1fs",
+                    attempt + 1, retry.max_attempts, wait,
+                )
+                await asyncio.sleep(wait)
+            elif 500 <= status < 600:
+                wait = retry.delay(attempt)
+                logger.warning(
+                    "Server error %d, attempt %d/%d, retrying in %.1fs",
+                    status, attempt + 1, retry.max_attempts, wait,
+                )
+                await asyncio.sleep(wait)
+            else:
+                raise
+        except httpx.TimeoutException:
+            logger.warning("Batch request timed out, skipping batch")
+            return [None] * len(s2_ids)
+
+    logger.error("All %d retry attempts exhausted, skipping batch", retry.max_attempts)
+    return [None] * len(s2_ids)

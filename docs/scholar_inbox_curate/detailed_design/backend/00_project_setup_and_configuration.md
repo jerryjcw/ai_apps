@@ -37,9 +37,15 @@ dev = [
 [project.scripts]
 scholar-curate = "src.cli:cli"
 
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.setuptools.packages.find]
+include = ["src*"]
+
 [build-system]
 requires = ["setuptools>=68"]
-build-backend = "setuptools.backends._legacy:_Backend"
+build-backend = "setuptools.build_meta"
 ```
 
 ### Post-install: Playwright Browser
@@ -57,43 +63,85 @@ This should be documented in the README and can be added as a post-install scrip
 ## Directory Layout
 
 ```
-scholar_inbox_curate/          # Project root
+scholar_inbox_curate/              # Project root
 ├── src/
 │   ├── __init__.py
-│   ├── cli.py
-│   ├── config.py
-│   ├── db.py
+│   ├── cli.py                     # Click CLI entry point
+│   ├── config.py                  # Load config.toml + .env
+│   ├── constants.py               # Centralised constants (URLs, thresholds, schema version)
+│   ├── db.py                      # SQLite connection, migrations, queries
+│   ├── errors.py                  # Custom exception hierarchy + retry decorator
+│   ├── rules.py                   # Prune/promote logic
+│   ├── scheduler.py               # APScheduler setup
 │   ├── ingestion/
 │   │   ├── __init__.py
-│   │   ├── scraper.py
-│   │   ├── resolver.py
-│   │   └── orchestrate.py
+│   │   ├── scraper.py             # Scholar Inbox API client (httpx + Playwright auth)
+│   │   ├── resolver.py            # Resolve paper IDs via Semantic Scholar
+│   │   ├── reresolver.py          # Re-resolve dangling papers with fallback IDs
+│   │   ├── orchestrate.py         # Ingestion orchestration (shared by CLI and web)
+│   │   └── backfill.py            # Gap detection, backfill, and dangling paper re-resolution
 │   ├── citations/
 │   │   ├── __init__.py
-│   │   ├── semantic_scholar.py
-│   │   ├── openalex.py
-│   │   └── velocity.py
-│   ├── rules.py
-│   ├── scheduler.py
+│   │   ├── semantic_scholar.py    # Semantic Scholar batch API client
+│   │   ├── openalex.py            # OpenAlex API client
+│   │   ├── velocity.py            # Velocity computation logic
+│   │   └── poller.py              # Citation poll orchestration
 │   └── web/
 │       ├── __init__.py
-│       ├── app.py
+│       ├── app.py                 # FastAPI application factory
+│       ├── filters.py             # Jinja2 template filters
+│       ├── routes/
+│       │   ├── __init__.py
+│       │   ├── dashboard.py
+│       │   ├── papers.py
+│       │   ├── settings.py
+│       │   └── triggers.py
 │       ├── templates/
 │       └── static/
-├── data/                      # Runtime data (gitignored)
+├── scripts/
+│   └── daily_update.sh            # Daily cron script (backfill + ingest + poll + prune)
+├── data/                          # Runtime data (gitignored)
 │   ├── scholar_curate.db
-│   └── browser_profile/
+│   ├── cookies.json               # Session cookies for API access
+│   └── browser_profile/           # Playwright persistent context (headed login only)
 ├── config.toml
 ├── .env
 ├── pyproject.toml
+├── CHANGELOG.md
 └── tests/
     ├── __init__.py
-    ├── conftest.py            # Shared fixtures (in-memory DB, mock configs)
-    ├── test_config.py
-    ├── test_db.py
-    ├── test_resolver.py
-    ├── test_velocity.py
-    └── test_rules.py
+    ├── conftest.py                # Shared fixtures (in-memory DB, mock configs)
+    └── scholar_inbox_curate/
+        ├── citations/
+        │   ├── test_openalex.py
+        │   ├── test_poller.py
+        │   ├── test_semantic_scholar.py
+        │   └── test_velocity.py
+        ├── cli/
+        │   └── test_cli.py
+        ├── config/
+        │   └── test_config.py
+        ├── db/
+        │   └── test_db.py
+        ├── errors/
+        │   └── test_errors.py
+        ├── ingestion/
+        │   ├── test_backfill.py
+        │   ├── test_orchestrate.py
+        │   ├── test_reresolver.py
+        │   ├── test_resolver.py
+        │   └── test_scraper.py
+        ├── rules/
+        │   └── test_rules.py
+        ├── scheduler/
+        │   └── test_scheduler.py
+        └── web/
+            ├── test_app.py
+            ├── test_dashboard.py
+            ├── test_filters.py
+            ├── test_paper_detail.py
+            ├── test_paper_list.py
+            └── test_settings.py
 ```
 
 The `data/` directory is created at runtime if it doesn't exist. It is added to `.gitignore`.
@@ -129,6 +177,7 @@ class IngestionConfig:
 class CitationConfig:
     semantic_scholar_batch_size: int = 100
     poll_schedule_cron: str = "0 6 * * 3"
+    poll_budget_fraction: float = 0.10  # Fraction of non-pruned papers to poll per cycle
 
 
 @dataclass(frozen=True)
@@ -223,9 +272,10 @@ def load_config(config_path: str = "config.toml", env_path: str = ".env") -> App
 - `min_age_months` must be > 0
 - `min_citations` must be >= 0
 - `semantic_scholar_batch_size` must be between 1 and 500 (API limit)
+- `poll_budget_fraction` must be between 0.0 (exclusive) and 1.0 (inclusive)
 - Secrets: warn (not error) if `scholar_inbox_email` or `scholar_inbox_password` are empty — ingestion CLI commands will fail at runtime, but citation polling can still work independently
 
-Validation errors raise `ConfigError(message)` — a custom exception defined in `src/config.py`.
+Validation errors raise `ConfigError(message)` — a custom exception defined in `src/errors.py` and imported into `src/config.py`.
 
 ---
 
@@ -246,6 +296,7 @@ backfill_lookback_days = 30       # How many days back to check for gaps
 [citations]
 semantic_scholar_batch_size = 100
 poll_schedule_cron = "0 6 * * 3"  # Every Wednesday at 6 AM
+poll_budget_fraction = 0.10       # Cap each poll cycle to 10% of non-pruned papers
 
 [pruning]
 min_age_months = 6

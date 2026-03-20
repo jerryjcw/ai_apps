@@ -22,6 +22,10 @@ from src.ingestion.resolver import (
     resolve_papers,
 )
 from src.ingestion.scraper import RawPaper
+from src.retry import RetryConfig
+
+# Zero-delay retry for fast tests
+_FAST_RETRY = RetryConfig(strategy="fixed", base_delay=0.0)
 
 _DUMMY_REQUEST = httpx.Request("GET", "https://api.semanticscholar.org/test")
 
@@ -480,24 +484,55 @@ class TestResolvePapers:
 class TestRateLimitingAndErrors:
     @pytest.mark.asyncio
     async def test_429_retry(self, raw_paper_with_arxiv, config_no_key):
-        """429 response triggers retry after Retry-After header."""
+        """429 response triggers retry."""
         s2_data = _s2_paper_response()
         mock_429 = _mock_response(429, headers={"Retry-After": "1"})
         mock_success = _mock_response(200, json=s2_data)
 
         client = AsyncMock(spec=httpx.AsyncClient)
-        # _rate_limited_request: first call returns 429, retry returns success
         client.get = AsyncMock(side_effect=[mock_429, mock_success])
 
-        result = await resolve_paper(client, raw_paper_with_arxiv, config_no_key)
+        with patch("src.ingestion.resolver.DEFAULT_RETRY", _FAST_RETRY):
+            result = await resolve_paper(client, raw_paper_with_arxiv, config_no_key)
 
         assert result is not None
         assert result.semantic_scholar_id == "abc123"
         assert client.get.call_count == 2
 
     @pytest.mark.asyncio
+    async def test_429_multiple_retries(self, raw_paper_with_arxiv, config_no_key):
+        """Multiple 429 responses are retried."""
+        s2_data = _s2_paper_response()
+        mock_429 = _mock_response(429, headers={"Retry-After": "1"})
+        mock_success = _mock_response(200, json=s2_data)
+
+        client = AsyncMock(spec=httpx.AsyncClient)
+        client.get = AsyncMock(side_effect=[mock_429, mock_429, mock_429, mock_success])
+
+        with patch("src.ingestion.resolver.DEFAULT_RETRY", _FAST_RETRY):
+            result = await resolve_paper(client, raw_paper_with_arxiv, config_no_key)
+
+        assert result is not None
+        assert result.semantic_scholar_id == "abc123"
+        assert client.get.call_count == 4
+
+    @pytest.mark.asyncio
+    async def test_429_all_attempts_exhausted(self, raw_paper_with_arxiv, config_no_key):
+        """All retry attempts exhausted on 429 returns None."""
+        mock_429 = _mock_response(429, headers={"Retry-After": "0"})
+
+        client = AsyncMock(spec=httpx.AsyncClient)
+        client.get = AsyncMock(return_value=mock_429)
+
+        with patch("src.ingestion.resolver.DEFAULT_RETRY", _FAST_RETRY):
+            result = await resolve_paper(client, raw_paper_with_arxiv, config_no_key)
+
+        # raise_for_status on 429 causes HTTPError, caught → returns None
+        assert result is None
+
+    @pytest.mark.asyncio
     async def test_5xx_retry(self, raw_paper_with_arxiv, config_with_key):
-        """5xx errors trigger a single retry."""
+        """5xx errors trigger retry."""
         s2_data = _s2_paper_response()
         mock_500 = _mock_response(500)
         mock_success = _mock_response(200, json=s2_data)
@@ -505,10 +540,28 @@ class TestRateLimitingAndErrors:
         client = AsyncMock(spec=httpx.AsyncClient)
         client.get = AsyncMock(side_effect=[mock_500, mock_success])
 
-        result = await resolve_paper(client, raw_paper_with_arxiv, config_with_key)
+        with patch("src.ingestion.resolver.DEFAULT_RETRY", _FAST_RETRY):
+            result = await resolve_paper(client, raw_paper_with_arxiv, config_with_key)
 
         assert result is not None
         assert result.semantic_scholar_id == "abc123"
+
+    @pytest.mark.asyncio
+    async def test_fixed_retry_strategy(self, raw_paper_with_arxiv, config_with_key):
+        """Fixed strategy retries with constant delay."""
+        s2_data = _s2_paper_response()
+        mock_500 = _mock_response(500)
+        mock_success = _mock_response(200, json=s2_data)
+        fixed_retry = RetryConfig(max_attempts=3, strategy="fixed", base_delay=0.0)
+
+        client = AsyncMock(spec=httpx.AsyncClient)
+        client.get = AsyncMock(side_effect=[mock_500, mock_500, mock_success])
+
+        with patch("src.ingestion.resolver.DEFAULT_RETRY", fixed_retry):
+            result = await resolve_paper(client, raw_paper_with_arxiv, config_with_key)
+
+        assert result is not None
+        assert client.get.call_count == 3
 
     @pytest.mark.asyncio
     async def test_timeout_returns_none(self, raw_paper_no_arxiv, config_with_key):

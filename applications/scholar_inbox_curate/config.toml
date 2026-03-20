@@ -30,6 +30,10 @@ semantic_scholar_batch_size = 100
 # Example: "0 6 * * 3" = every Wednesday at 6:00 AM
 poll_schedule_cron = "0 6 * * 3"
 
+# Fraction of non-pruned papers to poll per cycle (0.0-1.0)
+# Caps each cycle to avoid excessive API usage with a growing database
+poll_budget_fraction = 0.10
+
 [pruning]
 # Papers are pruned (hidden) when ALL conditions are met:
 # - Age since publication > min_age_months
@@ -51,6 +55,14 @@ min_velocity = 0.0                 # Papers with lower velocity (citations/month
 
 citation_threshold = 25            # Papers with this many citations are promoted
 velocity_threshold = 10.0          # Papers with this velocity (citations/month) are promoted
+
+[retry]
+# Retry strategy for Semantic Scholar API errors (429 rate limit, 5xx server errors)
+# strategy: "exponential" (doubles delay + jitter each attempt) or "fixed" (constant delay)
+strategy = "exponential"
+max_attempts = 4               # Total attempts (1 = no retries)
+base_delay = 2.0               # Seconds — initial wait (exponential) or constant wait (fixed)
+max_delay = 30.0               # Seconds — upper bound on delay (exponential only)
 
 [browser]
 # Playwright browser configuration (used for Scholar Inbox login with Cloudflare Turnstile)

@@ -34,7 +34,8 @@ CREATE TABLE IF NOT EXISTS papers (
     last_cited_check    TEXT,
     citation_count      INTEGER NOT NULL DEFAULT 0,
     citation_velocity   REAL NOT NULL DEFAULT 0.0,
-    category            TEXT
+    category            TEXT,
+    resolve_failures    INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE INDEX IF NOT EXISTS idx_papers_status ON papers(status);
@@ -107,11 +108,22 @@ def _migrate_v3_to_v4(conn: sqlite3.Connection) -> None:
         pass  # Column already exists
 
 
+def _migrate_v4_to_v5(conn: sqlite3.Connection) -> None:
+    """Add resolve_failures column to papers table."""
+    try:
+        conn.execute(
+            "ALTER TABLE papers ADD COLUMN resolve_failures INTEGER NOT NULL DEFAULT 0"
+        )
+    except sqlite3.OperationalError:
+        pass  # Column already exists
+
+
 # Migration functions: version_from -> callable
 _MIGRATIONS: dict[int, callable] = {
     1: _migrate_v1_to_v2,
     2: _migrate_v2_to_v3,
     3: _migrate_v3_to_v4,
+    4: _migrate_v4_to_v5,
 }
 
 
@@ -216,13 +228,13 @@ def upsert_paper(conn: sqlite3.Connection, paper: dict) -> bool:
             id, title, authors, abstract, url, arxiv_id, doi, venue, year,
             published_date, scholar_inbox_score, status, manual_status,
             ingested_at, last_cited_check, citation_count, citation_velocity,
-            category
+            category, resolve_failures
         ) VALUES (
             :id, :title, :authors, :abstract, :url, :arxiv_id, :doi, :venue, :year,
             :published_date, :scholar_inbox_score,
             :status, :manual_status, :ingested_at,
             :last_cited_check, :citation_count, :citation_velocity,
-            :category
+            :category, :resolve_failures
         )
         ON CONFLICT(id) DO UPDATE SET
             title = excluded.title,
@@ -253,6 +265,7 @@ def upsert_paper(conn: sqlite3.Connection, paper: dict) -> bool:
         "year": None,
         "scholar_inbox_score": None,
         "category": None,
+        "resolve_failures": 0,
     }
     params = {**defaults, **paper}
 
@@ -336,8 +349,22 @@ def update_paper_citations(
     )
 
 
-def get_papers_due_for_poll(conn: sqlite3.Connection, now: str) -> list[dict]:
+def count_non_pruned_papers(conn: sqlite3.Connection) -> int:
+    """Return the count of papers whose status is not 'pruned'."""
+    row = conn.execute(
+        "SELECT COUNT(*) as cnt FROM papers WHERE status != 'pruned'"
+    ).fetchone()
+    return row["cnt"]
+
+
+def get_papers_due_for_poll(
+    conn: sqlite3.Connection, now: str, limit: int | None = None
+) -> list[dict]:
     """Return papers that need citation polling based on age-based schedule.
+
+    Papers are ordered by overdue ratio (never-polled first, then most
+    overdue relative to their scheduled interval).  An optional *limit*
+    caps the number of rows returned for budget-based polling.
 
     Logic:
     - status='pruned' -> skip
@@ -348,7 +375,18 @@ def get_papers_due_for_poll(conn: sqlite3.Connection, now: str) -> list[dict]:
     - status='promoted' AND last check > 30 days ago -> include
     """
     sql = """\
-        SELECT * FROM papers
+        SELECT *,
+            CASE
+                WHEN last_cited_check IS NULL THEN 1e9
+                ELSE (julianday(:now) - julianday(last_cited_check))
+                     / CASE
+                         WHEN status = 'promoted' THEN 30.0
+                         WHEN julianday(:now) - julianday(ingested_at) < 91 THEN 7.0
+                         WHEN julianday(:now) - julianday(ingested_at) < 365 THEN 14.0
+                         ELSE 30.0
+                       END
+            END AS overdue_ratio
+        FROM papers
         WHERE status != 'pruned'
         AND (
             last_cited_check IS NULL
@@ -370,7 +408,10 @@ def get_papers_due_for_poll(conn: sqlite3.Connection, now: str) -> list[dict]:
                 AND last_cited_check <= datetime(:now, '-30 days')
             )
         )
+        ORDER BY overdue_ratio DESC
     """
+    if limit is not None:
+        sql += f"\n        LIMIT {int(limit)}"
     rows = conn.execute(sql, {"now": now}).fetchall()
     return _rows_to_dicts(rows)
 
@@ -428,6 +469,79 @@ def count_papers(
         f"SELECT COUNT(*) as cnt FROM papers {where_clause}", params
     ).fetchone()
     return row["cnt"]
+
+
+def get_dangling_papers(
+    conn: sqlite3.Connection,
+    max_failures: int = 3,
+) -> list[dict]:
+    """Return papers with unresolved synthetic IDs (``title:`` or ``si-`` prefix).
+
+    These papers were stored with fallback IDs because Semantic Scholar
+    resolution failed at ingestion time.  They cannot be citation-polled
+    until re-resolved.
+
+    Papers whose ``resolve_failures`` counter has reached *max_failures*
+    are excluded — they will be retried after the counter is reset
+    (e.g. at the start of the next backfill cycle).
+    """
+    rows = conn.execute(
+        "SELECT * FROM papers "
+        "WHERE (id LIKE 'title:%' OR id LIKE 'si-%') "
+        "AND resolve_failures < ?",
+        (max_failures,),
+    ).fetchall()
+    return _rows_to_dicts(rows)
+
+
+def increment_resolve_failures(conn: sqlite3.Connection, paper_id: str) -> None:
+    """Increment the resolve_failures counter for a paper."""
+    conn.execute(
+        "UPDATE papers SET resolve_failures = resolve_failures + 1 WHERE id = ?",
+        (paper_id,),
+    )
+
+
+def reset_resolve_failures(conn: sqlite3.Connection) -> None:
+    """Reset resolve_failures to 0 for all dangling papers.
+
+    Called at the start of a backfill cycle so every paper gets a fresh
+    set of resolution attempts.
+    """
+    conn.execute(
+        "UPDATE papers SET resolve_failures = 0 "
+        "WHERE (id LIKE 'title:%' OR id LIKE 'si-%') AND resolve_failures > 0"
+    )
+
+
+def replace_paper_id(
+    conn: sqlite3.Connection,
+    old_id: str,
+    new_id: str,
+    updated_fields: dict,
+) -> bool:
+    """Replace a paper's synthetic ID with a resolved one and update metadata.
+
+    Deletes the old row (``ON DELETE CASCADE`` removes any snapshots) and
+    inserts a new row with the resolved ID.  This is safe because dangling
+    papers have no useful citation snapshots.
+
+    Returns ``True`` if the replacement was performed, ``False`` if *new_id*
+    already exists (in which case the dangling duplicate is simply deleted).
+    """
+    if paper_exists(conn, new_id):
+        conn.execute("DELETE FROM papers WHERE id = ?", (old_id,))
+        return False
+
+    row = conn.execute("SELECT * FROM papers WHERE id = ?", (old_id,)).fetchone()
+    if row is None:
+        return False
+
+    old_paper = dict(row)
+    merged = {**old_paper, **updated_fields, "id": new_id}
+    conn.execute("DELETE FROM papers WHERE id = ?", (old_id,))
+    upsert_paper(conn, merged)
+    return True
 
 
 def paper_exists(conn: sqlite3.Connection, paper_id: str) -> bool:

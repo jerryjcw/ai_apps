@@ -18,6 +18,7 @@ from src.ingestion.backfill import (
     _raw_paper_to_db_dict,
     run_backfill,
 )
+from src.ingestion.reresolver import ReResolveResult
 from src.ingestion.scraper import RawPaper
 
 
@@ -105,6 +106,16 @@ class TestBackfillResult:
 # ---------------------------------------------------------------------------
 
 class TestRunBackfill:
+    @pytest.fixture(autouse=True)
+    def _mock_reresolver(self):
+        """Mock re_resolve_dangling — it has its own dedicated tests."""
+        with patch(
+            "src.ingestion.reresolver.re_resolve_dangling",
+            new_callable=AsyncMock,
+            return_value=ReResolveResult(),
+        ):
+            yield
+
     @pytest.mark.asyncio
     @patch("src.ingestion.backfill.scrape_date", new_callable=AsyncMock)
     async def test_no_missing_dates(self, mock_scrape, tmp_path, db_conn):

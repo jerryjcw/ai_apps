@@ -52,14 +52,17 @@ velocity_threshold = 10.0
 The web UI is the primary interface for browsing papers and triggering operations.
 
 ```bash
-# Web UI only (no scheduler)
-.venv/bin/scholar-curate --config config.toml serve
+# Activate the virtual environment first
+source .venv/bin/activate
 
-# Web UI + automated scheduler together
-.venv/bin/scholar-curate --config config.toml run --with-web
+# Start the web UI (default: http://127.0.0.1:8000)
+scholar-curate serve
 
 # Custom host/port
-.venv/bin/scholar-curate --config config.toml serve --host 0.0.0.0 --port 8080
+scholar-curate serve --host 0.0.0.0 --port 8080
+
+# With verbose logging
+scholar-curate -v serve
 ```
 
 Then open **http://127.0.0.1:8000** in your browser.
