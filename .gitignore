@@ -22,5 +22,6 @@ Thumbs.db
 output
 
 # claude
-.claude/
+.claude/*.json
+.codex
 CLAUDE.md
