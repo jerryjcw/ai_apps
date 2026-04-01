@@ -229,7 +229,7 @@ After the table, provide:
 
 ### Save to File
 
-Write the complete results to a markdown file at `applications/jobsearch/job_matches_<Name>_<YYYY-MM-DD>.md` (e.g. `job_matches_Frost_2026-03-21.md`). Use the candidate's name (or a short recognizable form of it) extracted from the CV. The report header must also include the **applicant's name** and **date of search**. This file is the primary deliverable of this skill.
+Write the complete results to a markdown file at `output/job-match/job_matches_<Name>_<YYYY-MM-DD>.md` (e.g. `output/job-match/job_matches_Frost_2026-03-21.md`). Create the `output/job-match/` directory if it doesn't exist. Use the candidate's name (or a short recognizable form of it) extracted from the CV. The report header must also include the **applicant's name** and **date of search**. This file is the primary deliverable of this skill.
 
 ---
 
