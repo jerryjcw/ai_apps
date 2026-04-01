@@ -16,6 +16,7 @@ from helpers.state_manager import (
     check_convergence,
     get_active_ideas,
     get_ideas_by_status,
+    get_ideas_needing_strict_rereview,
     get_next_stage,
     get_open_issues,
     get_quality_standard,
@@ -156,11 +157,12 @@ class TestIdeaManagement:
         state = update_idea_status(workspace, "idea1", "refine", "still needs work")
         assert state["ideas"]["idea1"]["refine_count"] == 2
 
-    def test_approved_records_round(self, workspace):
+    def test_approved_records_round_and_quality(self, workspace):
         init_state(workspace, "topic")
         add_idea(workspace, "idea1", "Idea 1")
         state = update_idea_status(workspace, "idea1", "approved")
         assert state["ideas"]["idea1"]["round_approved"] == 1
+        assert state["ideas"]["idea1"]["quality_approved"] == "lenient"
 
     def test_pivot_increments_count(self, workspace):
         init_state(workspace, "topic")
@@ -259,16 +261,60 @@ class TestCanRefineAndPivot:
 
 
 class TestConvergence:
-    def test_converges_with_3_approved(self, workspace):
-        init_state(workspace, "topic")
+    """Convergence requires ≥3 ideas approved at strict quality, or max rounds."""
+
+    def test_lenient_approvals_do_not_converge(self, workspace):
+        """3 ideas approved at lenient (round 1) should NOT trigger convergence."""
+        init_state(workspace, "topic")  # round 1 → lenient
         for name in ["a", "b", "c"]:
             add_idea(workspace, name, name.upper())
             update_idea_status(workspace, name, "approved")
         state = load_state(workspace)
+        # All approved at lenient — not strict
+        assert state["ideas"]["a"]["quality_approved"] == "lenient"
+        assert check_convergence(state) is False
+
+    def test_strict_approvals_converge(self, workspace):
+        """3 ideas approved at strict quality DO trigger convergence."""
+        state = init_state(workspace, "topic")
+        state["current_round"] = 3
+        state["quality_standard"] = "strict"
+        save_state(workspace, state)
+        for name in ["a", "b", "c"]:
+            add_idea(workspace, name, name.upper())
+            update_idea_status(workspace, name, "approved")
+        state = load_state(workspace)
+        assert state["ideas"]["a"]["quality_approved"] == "strict"
         assert check_convergence(state) is True
 
-    def test_not_converged_with_2(self, workspace):
-        init_state(workspace, "topic")
+    def test_mixed_quality_does_not_converge(self, workspace):
+        """2 strict + 1 lenient = only 2 strict → no convergence."""
+        state = init_state(workspace, "topic")
+        state["max_rounds"] = 5  # raise cap so round 3 doesn't trigger fallback
+        save_state(workspace, state)
+        # Approve one at lenient
+        add_idea(workspace, "a", "A")
+        update_idea_status(workspace, "a", "approved")
+        # Move to strict round (below max)
+        state = load_state(workspace)
+        state["current_round"] = 3
+        state["quality_standard"] = "strict"
+        save_state(workspace, state)
+        # Approve two more at strict
+        for name in ["b", "c"]:
+            add_idea(workspace, name, name.upper())
+            update_idea_status(workspace, name, "approved")
+        state = load_state(workspace)
+        assert state["ideas"]["a"]["quality_approved"] == "lenient"
+        assert state["ideas"]["b"]["quality_approved"] == "strict"
+        assert check_convergence(state) is False  # only 2 strict
+
+    def test_not_converged_with_2_strict(self, workspace):
+        state = init_state(workspace, "topic")
+        state["max_rounds"] = 5
+        state["current_round"] = 3
+        state["quality_standard"] = "strict"
+        save_state(workspace, state)
         for name in ["a", "b"]:
             add_idea(workspace, name, name.upper())
             update_idea_status(workspace, name, "approved")
@@ -282,12 +328,15 @@ class TestConvergence:
         state = load_state(workspace)
         assert check_convergence(state) is True
 
-    def test_converges_with_3_approved_exact(self, workspace):
-        init_state(workspace, "topic")
+    def test_converges_with_3_strict_plus_refine(self, workspace):
+        """3 strict-approved + 1 refine idea → still converges."""
+        state = init_state(workspace, "topic")
+        state["current_round"] = 3
+        state["quality_standard"] = "strict"
+        save_state(workspace, state)
         for name in ["a", "b", "c"]:
             add_idea(workspace, name, name.upper())
             update_idea_status(workspace, name, "approved")
-        # Also add a non-approved idea — should not prevent convergence
         add_idea(workspace, "d", "D")
         update_idea_status(workspace, "d", "refine")
         state = load_state(workspace)
@@ -303,7 +352,7 @@ class TestRoundManagement:
         assert len(state["iteration_history"]) == 1
         assert state["iteration_history"][0]["round"] == 1
 
-    def test_start_new_round(self, workspace):
+    def test_start_new_round_with_refine(self, workspace):
         init_state(workspace, "topic")
         add_idea(workspace, "a", "A")
         update_idea_status(workspace, "a", "refine")
@@ -311,6 +360,87 @@ class TestRoundManagement:
         assert state["current_round"] == 2
         assert state["quality_standard"] == "moderate"
         assert state["current_stage"] == "stage_3_hypothesis"
+
+    def test_start_new_round_demotes_provisional_approvals(self, workspace):
+        """Lenient-approved ideas get demoted to in_review for stricter round."""
+        init_state(workspace, "topic")
+        add_idea(workspace, "a", "A")
+        update_idea_status(workspace, "a", "approved")  # approved at lenient
+        state = load_state(workspace)
+        assert state["ideas"]["a"]["quality_approved"] == "lenient"
+
+        state = start_new_round(workspace)  # now round 2, moderate
+        assert state["ideas"]["a"]["status"] == "in_review"
+        assert state["current_stage"] == "stage_6_advisor_review"
+
+    def test_start_new_round_refine_takes_priority_over_provisional(self, workspace):
+        """If both refine and provisional ideas exist, go to stage_3."""
+        init_state(workspace, "topic")
+        add_idea(workspace, "a", "A")
+        add_idea(workspace, "b", "B")
+        update_idea_status(workspace, "a", "approved")  # lenient
+        update_idea_status(workspace, "b", "refine")
+        state = start_new_round(workspace)
+        assert state["ideas"]["a"]["status"] == "in_review"  # demoted
+        assert state["ideas"]["b"]["status"] == "refine"
+        assert state["current_stage"] == "stage_3_hypothesis"
+
+    def test_start_new_round_strict_approvals_not_demoted(self, workspace):
+        """Ideas approved at strict should NOT be demoted in a new round."""
+        state = init_state(workspace, "topic")
+        state["current_round"] = 3
+        state["quality_standard"] = "strict"
+        save_state(workspace, state)
+        add_idea(workspace, "a", "A")
+        update_idea_status(workspace, "a", "approved")  # strict
+
+        # Simulate going to round 4 (still strict)
+        state = start_new_round(workspace)
+        assert state["ideas"]["a"]["status"] == "approved"  # not demoted
+        assert state["ideas"]["a"]["quality_approved"] == "strict"
+
+
+class TestStrictRereview:
+    """Tests for get_ideas_needing_strict_rereview()."""
+
+    def test_no_approved_ideas(self, workspace):
+        init_state(workspace, "topic")
+        add_idea(workspace, "a", "A")
+        state = load_state(workspace)
+        assert get_ideas_needing_strict_rereview(state) == []
+
+    def test_lenient_approved_needs_rereview(self, workspace):
+        init_state(workspace, "topic")  # round 1, lenient
+        add_idea(workspace, "a", "A")
+        update_idea_status(workspace, "a", "approved")
+        state = load_state(workspace)
+        assert get_ideas_needing_strict_rereview(state) == ["a"]
+
+    def test_strict_approved_does_not_need_rereview(self, workspace):
+        state = init_state(workspace, "topic")
+        state["current_round"] = 3
+        state["quality_standard"] = "strict"
+        save_state(workspace, state)
+        add_idea(workspace, "a", "A")
+        update_idea_status(workspace, "a", "approved")
+        state = load_state(workspace)
+        assert get_ideas_needing_strict_rereview(state) == []
+
+    def test_mixed_quality_approvals(self, workspace):
+        init_state(workspace, "topic")  # round 1, lenient
+        add_idea(workspace, "a", "A")
+        update_idea_status(workspace, "a", "approved")
+
+        state = load_state(workspace)
+        state["current_round"] = 3
+        state["quality_standard"] = "strict"
+        save_state(workspace, state)
+        add_idea(workspace, "b", "B")
+        update_idea_status(workspace, "b", "approved")
+
+        state = load_state(workspace)
+        needs = get_ideas_needing_strict_rereview(state)
+        assert needs == ["a"]  # only lenient one
 
 
 class TestViabilityAssessment:
