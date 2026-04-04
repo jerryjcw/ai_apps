@@ -941,11 +941,23 @@ print(check_convergence(state))
 "
 ```
 
-- If converged (>= 3 approved with all severe/major resolved, or max rounds) → Stage 9
+- If converged (>= 3 approved **at strict quality**, or max rounds) → Stage 9
 - If not converged:
   - `record_round_history()`
   - `start_new_round()` (increments round, tightens quality standard)
-  - Go back to the appropriate stage based on what needs work
+  - **Provisional approvals** (ideas approved at lenient or moderate) are automatically
+    demoted to `in_review` by `start_new_round()` so they face re-review at the
+    stricter standard. They do NOT go through student revision — only the reviewers
+    re-evaluate them at the higher bar.
+  - Routing: if `refine` ideas exist → `stage_3_hypothesis`;
+    if only provisional re-reviews → `stage_6_advisor_review`;
+    otherwise → `stage_9_final_output`
+
+**Why strict-only convergence?** Without this gate, 3 ideas approved at lenient
+in Round 1 would skip moderate and strict review entirely, allowing mediocre
+ideas into the final output. The progressive quality standards (lenient →
+moderate → strict) serve as efficient early-round filters, but every idea in
+the final output must survive strict (top-conference) scrutiny.
 
 ---
 
