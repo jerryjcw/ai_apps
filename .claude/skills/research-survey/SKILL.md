@@ -32,9 +32,16 @@ pages (Step 1c, and deeper reads in Steps 3-4).
 
 ### Prerequisites
 
-Playwright must be installed in the project's Python environment. Check with:
+Playwright is installed in the **auto_research venv**. Always use this
+Python for all Playwright scripts:
+
+```
+/Users/jerry/projects/ai_apps/applications/auto_research/.venv/bin/python3
+```
+
+Check with:
 ```bash
-python3 -c "from playwright.async_api import async_playwright; print('OK')"
+/Users/jerry/projects/ai_apps/applications/auto_research/.venv/bin/python3 -c "from playwright.async_api import async_playwright; print('OK')"
 ```
 
 If not installed:
@@ -73,8 +80,7 @@ one at a time.
 ### Parameters to collect
 
 1. **Root folder** — Where should all outputs be saved?
-   - Default: `~/Documents/cowork/alphaxiv/` (or the user's currently
-     mounted folder in Cowork)
+   - Default: `/Users/jerry/projects/ai_apps/output/alpharxiv_trendy_analysis/`
    - The user may want a different location — always ask.
    - Example alternatives: `~/research/papers/`, a project-specific
      folder, an existing alphaxiv folder from a prior run.

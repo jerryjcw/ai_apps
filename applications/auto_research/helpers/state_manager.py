@@ -200,6 +200,7 @@ def update_idea_status(
         idea["refine_count"] = idea.get("refine_count", 0) + 1
     if status == "approved":
         idea["round_approved"] = state["current_round"]
+        idea["quality_approved"] = state.get("quality_standard", "lenient")
     if status == "pivoted":
         state["pivot_count"] = state.get("pivot_count", 0) + 1
     save_state(workspace, state)
@@ -276,15 +277,34 @@ def check_convergence(state: dict[str, Any]) -> bool:
     """Check if pipeline should proceed to Stage 9.
 
     Converges when:
-    - At least 3 ideas are approved, OR
-    - We've reached max rounds
+    - At least 3 ideas are approved at **strict** quality, OR
+    - We've reached max rounds (strict is enforced at max round anyway)
     """
-    approved = get_ideas_by_status(state, "approved")
-    if len(approved) >= 3:
+    strict_approved = [
+        slug
+        for slug, idea in state["ideas"].items()
+        if idea.get("status") == "approved"
+        and idea.get("quality_approved") == "strict"
+    ]
+    if len(strict_approved) >= 3:
         return True
     if state["current_round"] >= state.get("max_rounds", MAX_ROUNDS):
         return True
     return False
+
+
+def get_ideas_needing_strict_rereview(state: dict[str, Any]) -> list[str]:
+    """Return slugs of ideas approved below strict quality.
+
+    These ideas passed review at lenient or moderate standards and need
+    re-review at the strict level before they count toward convergence.
+    """
+    return [
+        slug
+        for slug, idea in state["ideas"].items()
+        if idea.get("status") == "approved"
+        and idea.get("quality_approved") != "strict"
+    ]
 
 
 def record_round_history(workspace: Path) -> dict[str, Any]:
@@ -310,16 +330,33 @@ def record_round_history(workspace: Path) -> dict[str, Any]:
 
 
 def start_new_round(workspace: Path) -> dict[str, Any]:
-    """Increment round counter and reset stage to appropriate start."""
+    """Increment round counter and reset stage to appropriate start.
+
+    Provisionally-approved ideas (approved below the new quality standard)
+    are demoted to ``in_review`` so they go through re-review at the
+    stricter level.  They skip student revision — only the reviewers
+    re-evaluate them.
+    """
     state = load_state(workspace)
     state["current_round"] += 1
     state["quality_standard"] = get_quality_standard(state["current_round"])
-    # Ideas that need REFINE go back; new round starts at the earliest needed stage
+
+    # Demote ideas approved below the new quality standard
+    provisional = get_ideas_needing_strict_rereview(state)
+    for slug in provisional:
+        state["ideas"][slug]["status"] = "in_review"
+
+    # Determine the earliest stage we need to revisit
     refine_ideas = get_ideas_by_status(state, "refine")
     if refine_ideas:
+        # Refine ideas need student revision → start at hypothesis stage
         state["current_stage"] = "stage_3_hypothesis"
+    elif provisional:
+        # Only provisional re-reviews needed → jump to advisor review
+        state["current_stage"] = "stage_6_advisor_review"
     else:
         state["current_stage"] = "stage_9_final_output"
+
     save_state(workspace, state)
     return state
 
