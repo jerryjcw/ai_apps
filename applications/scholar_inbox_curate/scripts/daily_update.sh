@@ -10,6 +10,10 @@ APP_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"  # applications/scholar_inbox_curate/
 
 cd "$APP_ROOT"
 
+# Activate the local virtualenv so `python` and installed console scripts resolve correctly.
+# shellcheck disable=SC1091
+source "$APP_ROOT/.venv/bin/activate"
+
 CURATE="$APP_ROOT/.venv/bin/scholar-curate"
 CONFIG="$APP_ROOT/config.toml"
 
