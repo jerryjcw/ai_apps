@@ -1,0 +1,75 @@
+{
+  "val": {
+    "accuracy": 0.8761356365962892,
+    "roc_auc": 0.9301235478517427,
+    "pr_auc": 0.8349705689717355,
+    "f1": 0.7187681580476467,
+    "log_loss": 0.27277823717712746
+  },
+  "test": {
+    "accuracy": 0.8767529941652165,
+    "roc_auc": 0.929503528268453,
+    "pr_auc": 0.8328923701349401,
+    "f1": 0.7184284377923292,
+    "log_loss": 0.2747052745801615
+  },
+  "top_features": [
+    {
+      "feature": "relationship",
+      "gain": 74.44972229003906
+    },
+    {
+      "feature": "marital-status",
+      "gain": 69.82540130615234
+    },
+    {
+      "feature": "capital-gain",
+      "gain": 37.54435348510742
+    },
+    {
+      "feature": "education-num",
+      "gain": 19.350648880004883
+    },
+    {
+      "feature": "education",
+      "gain": 17.81968879699707
+    },
+    {
+      "feature": "occupation",
+      "gain": 13.385392189025879
+    },
+    {
+      "feature": "capital-loss",
+      "gain": 12.674470901489258
+    },
+    {
+      "feature": "age",
+      "gain": 7.618999481201172
+    },
+    {
+      "feature": "hours-per-week",
+      "gain": 6.6833720207214355
+    },
+    {
+      "feature": "sex",
+      "gain": 5.6241374015808105
+    },
+    {
+      "feature": "workclass",
+      "gain": 4.886483669281006
+    },
+    {
+      "feature": "native-country",
+      "gain": 4.389956951141357
+    },
+    {
+      "feature": "race",
+      "gain": 3.8879449367523193
+    },
+    {
+      "feature": "fnlwgt",
+      "gain": 2.8500804901123047
+    }
+  ],
+  "best_iteration": 269
+}
