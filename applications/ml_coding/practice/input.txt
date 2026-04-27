@@ -1,0 +1,5 @@
+{"customer_id": 12, "global_order_count": [0,1], "global_visit_count": [10,11], "customer_value": "High", "customer_country": "UK"}
+{"customer_id": 14, "global_order_count": [1,1], "global_visit_count": [10,11], "customer_value": "Low", "customer_country": "France"}
+{"customer_id": 15, "global_order_count": [1,1], "global_visit_count": [10,11], "customer_value": "low", "customer_country": "France"}
+{"customer_id": 11, "global_order_count": [1,1], "global_visit_count": [10,11], "customer_value": "High", "customer_country": "Australia"}
+{"customer_id": 13, "global_order_count": [1,1], "global_visit_count": [10,11], "customer_value": "Medium", "customer_country": "UK"}
