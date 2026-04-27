@@ -25,3 +25,6 @@ output
 .claude/*.json
 .codex
 CLAUDE.md
+
+# Local datasets (re-downloadable from MovieLens / OpenML)
+applications/ml_coding/xgboost/data/
