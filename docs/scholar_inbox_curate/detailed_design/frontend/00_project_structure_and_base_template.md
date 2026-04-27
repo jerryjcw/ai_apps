@@ -69,6 +69,10 @@ def _register_routes(app: FastAPI, templates: Jinja2Templates):
     async def paper_detail(request: Request, paper_id: str):
         ...
 
+    @app.get("/stats")
+    async def stats(request: Request):
+        ...
+
     @app.get("/settings")
     async def settings(request: Request):
         ...
@@ -161,7 +165,7 @@ All frontend dependencies are loaded from CDNs. No npm, no build tools.
 |-----------|---------|---------|-------|
 | HTMX      | 1.9.x   | `https://unpkg.com/htmx.org@1.9.12` | Loaded on every page (in base template) |
 | Pico CSS  | 2.x     | `https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css` | Loaded on every page |
-| Chart.js  | 4.x     | `https://cdn.jsdelivr.net/npm/chart.js@4.4.6/dist/chart.umd.min.js` | Loaded only on paper detail page via `{% block extra_scripts %}` |
+| Chart.js  | 4.x     | `https://cdn.jsdelivr.net/npm/chart.js@4.4.6/dist/chart.umd.min.js` | Loaded via `{% block extra_scripts %}` on the paper detail page and the stats page |
 
 **Rationale for CDN over local static files:** Zero-maintenance versioning. The app is a personal tool accessed from a single machine, so CDN latency is negligible. If offline use is needed in the future, vendor the files into `src/web/static/vendor/`.
 
@@ -208,6 +212,12 @@ The base template defines the full HTML5 document structure. All page templates 
                     <a href="/papers"
                        {% if current_path.startswith('/papers') %}aria-current="page"{% endif %}>
                         Papers
+                    </a>
+                </li>
+                <li>
+                    <a href="/stats"
+                       {% if current_path.startswith('/stats') %}aria-current="page"{% endif %}>
+                        Stats
                     </a>
                 </li>
                 <li>
@@ -368,6 +378,7 @@ src/web/
 │   │   ├── list.html          # Paper list page
 │   │   ├── detail.html        # Paper detail page
 │   │   └── _rows.html         # HTMX partial: table rows + pagination
+│   ├── stats.html             # Database stats page (date coverage, poll freshness, ingestion/citation trends)
 │   ├── settings.html          # Settings page
 │   └── components/
 │       ├── _summary_card.html
