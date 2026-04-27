@@ -1,0 +1,255 @@
+{% extends "base.html" %}
+
+{% block title %}Stats — Scholar Inbox Curate{% endblock %}
+
+{% block content %}
+
+<hgroup>
+    <h1>Database Stats</h1>
+    <p>An at-a-glance view of what's in the database, how fresh it is, and how the pipeline has been running.</p>
+</hgroup>
+
+<!-- ============================================================
+     1. Date coverage
+     ============================================================ -->
+<section class="stats-section">
+    <h2>Paper date coverage</h2>
+
+    <div class="grid stats-grid">
+        <article class="stat-card">
+            <header>Oldest paper</header>
+            {% if date_range.oldest_published %}
+                <p class="card-value stat-date">{{ date_range.oldest_published.published_date[:10] }}</p>
+                <p class="stat-sub">
+                    <a href="/papers/{{ date_range.oldest_published.id }}">
+                        {{ date_range.oldest_published.title|truncate(70) }}
+                    </a>
+                </p>
+            {% else %}
+                <p class="card-value">—</p>
+                <p class="stat-sub">No papers with a publication date yet.</p>
+            {% endif %}
+        </article>
+
+        <article class="stat-card">
+            <header>Newest paper</header>
+            {% if date_range.newest_published %}
+                <p class="card-value stat-date">{{ date_range.newest_published.published_date[:10] }}</p>
+                <p class="stat-sub">
+                    <a href="/papers/{{ date_range.newest_published.id }}">
+                        {{ date_range.newest_published.title|truncate(70) }}
+                    </a>
+                </p>
+            {% else %}
+                <p class="card-value">—</p>
+                <p class="stat-sub">No papers with a publication date yet.</p>
+            {% endif %}
+        </article>
+    </div>
+
+    <div class="grid stats-subgrid">
+        <article class="stat-mini">
+            <header>Tracked since</header>
+            <p class="stat-mini-value">
+                {{ date_range.oldest_ingested.ingested_at[:10] if date_range.oldest_ingested else '—' }}
+            </p>
+        </article>
+        <article class="stat-mini">
+            <header>Last ingestion</header>
+            <p class="stat-mini-value">
+                {{ date_range.newest_ingested.ingested_at[:10] if date_range.newest_ingested else '—' }}
+            </p>
+        </article>
+        <article class="stat-mini">
+            <header>Total papers</header>
+            <p class="stat-mini-value">{{ date_range.total_papers }}</p>
+        </article>
+        <article class="stat-mini">
+            <header>Missing publication date</header>
+            <p class="stat-mini-value">{{ date_range.missing_published_date }}</p>
+        </article>
+    </div>
+</section>
+
+<!-- ============================================================
+     2. Poll freshness
+     ============================================================ -->
+<section class="stats-section">
+    <h2>Last poll freshness</h2>
+    <p class="stats-lede">
+        <strong>{{ poll.stale_over_week }}</strong> of {{ poll.total_non_pruned }} non-pruned papers
+        haven't been polled in the past week.
+    </p>
+
+    {% if poll.total_non_pruned > 0 %}
+    <div class="stats-chart">
+        <canvas id="pollChart" aria-label="Papers by time since last citation poll"></canvas>
+    </div>
+
+    <div class="table-responsive">
+        <table class="stats-table">
+            <thead>
+                <tr>
+                    <th scope="col">Age since last poll</th>
+                    <th scope="col">Papers</th>
+                    <th scope="col">Share</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for b in poll.buckets %}
+                <tr>
+                    <td>{{ b.label }}</td>
+                    <td>{{ b.count }}</td>
+                    <td>
+                        {% set pct = (100.0 * b.count / poll.total_non_pruned) if poll.total_non_pruned else 0 %}
+                        <div class="bar-cell">
+                            <div class="bar-fill" style="width: {{ '%.1f'|format(pct) }}%"></div>
+                            <span>{{ '%.1f'|format(pct) }}%</span>
+                        </div>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <p>No non-pruned papers to poll.</p>
+    {% endif %}
+</section>
+
+<!-- ============================================================
+     3. Ingestion & citation activity
+     ============================================================ -->
+<section class="stats-section">
+    <div class="grid stats-twocol">
+        <div>
+            <h2>Papers ingested per month</h2>
+            <p class="stats-lede">Last 12 months.</p>
+            <div class="stats-chart">
+                <canvas id="monthlyChart" aria-label="Papers ingested per month"></canvas>
+            </div>
+        </div>
+
+        <div>
+            <h2>Citation updates per week</h2>
+            <p class="stats-lede">Last 26 weeks — counts rows in <code>citation_snapshots</code> by ISO week.</p>
+            <div class="stats-chart">
+                <canvas id="weeklyChart" aria-label="Citation snapshot rows per week"></canvas>
+            </div>
+        </div>
+    </div>
+</section>
+
+{% endblock %}
+
+{% block extra_scripts %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.6/dist/chart.umd.min.js"></script>
+<script>
+(function() {
+    const pollBuckets = {{ poll.buckets | tojson }};
+    const monthly     = {{ monthly | tojson }};
+    const weekly      = {{ weekly | tojson }};
+
+    const isDark    = window.matchMedia('(prefers-color-scheme: dark)').matches;
+    const textColor = isDark ? '#e2e8f0' : '#334155';
+    const gridColor = isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.08)';
+
+    const palette = {
+        primary: '#3b82f6',
+        primarySoft: isDark ? 'rgba(59,130,246,0.35)' : 'rgba(59,130,246,0.55)',
+        accent: '#8b5cf6',
+        accentSoft: isDark ? 'rgba(139,92,246,0.35)' : 'rgba(139,92,246,0.55)',
+        warn: '#f59e0b',
+        warnSoft: isDark ? 'rgba(245,158,11,0.35)' : 'rgba(245,158,11,0.55)',
+    };
+
+    const baseOpts = {
+        responsive: true,
+        maintainAspectRatio: false,
+        animation: { duration: 600, easing: 'easeOutCubic' },
+        plugins: {
+            legend: { display: false },
+            tooltip: {
+                backgroundColor: isDark ? '#0f172a' : '#ffffff',
+                titleColor: textColor,
+                bodyColor: textColor,
+                borderColor: gridColor,
+                borderWidth: 1,
+                padding: 10,
+                displayColors: false,
+            }
+        },
+        scales: {
+            x: { ticks: { color: textColor, maxRotation: 45 }, grid: { display: false } },
+            y: { beginAtZero: true, ticks: { color: textColor, precision: 0 }, grid: { color: gridColor } },
+        }
+    };
+
+    // Poll staleness bar chart
+    const pollCanvas = document.getElementById('pollChart');
+    if (pollCanvas && pollBuckets.length) {
+        new Chart(pollCanvas, {
+            type: 'bar',
+            data: {
+                labels: pollBuckets.map(b => b.label),
+                datasets: [{
+                    data: pollBuckets.map(b => b.count),
+                    backgroundColor: pollBuckets.map((b, i) => {
+                        // Never polled + 8+ weeks get warn color.
+                        if (i === 0 || i === pollBuckets.length - 1) return palette.warnSoft;
+                        return palette.primarySoft;
+                    }),
+                    borderColor: pollBuckets.map((b, i) => (i === 0 || i === pollBuckets.length - 1) ? palette.warn : palette.primary),
+                    borderWidth: 1.5,
+                    borderRadius: 6,
+                    maxBarThickness: 56,
+                }]
+            },
+            options: baseOpts,
+        });
+    }
+
+    // Monthly ingests
+    const monthlyCanvas = document.getElementById('monthlyChart');
+    if (monthlyCanvas && monthly.length) {
+        new Chart(monthlyCanvas, {
+            type: 'bar',
+            data: {
+                labels: monthly.map(m => m.month),
+                datasets: [{
+                    data: monthly.map(m => m.count),
+                    backgroundColor: palette.primarySoft,
+                    borderColor: palette.primary,
+                    borderWidth: 1.5,
+                    borderRadius: 6,
+                    maxBarThickness: 36,
+                }]
+            },
+            options: baseOpts,
+        });
+    }
+
+    // Weekly citation updates (line with soft fill)
+    const weeklyCanvas = document.getElementById('weeklyChart');
+    if (weeklyCanvas && weekly.length) {
+        new Chart(weeklyCanvas, {
+            type: 'line',
+            data: {
+                labels: weekly.map(w => w.week_start),
+                datasets: [{
+                    data: weekly.map(w => w.count),
+                    borderColor: palette.accent,
+                    backgroundColor: palette.accentSoft,
+                    fill: true,
+                    tension: 0.35,
+                    pointRadius: 2,
+                    pointHoverRadius: 5,
+                    borderWidth: 2,
+                }]
+            },
+            options: baseOpts,
+        });
+    }
+})();
+</script>
+{% endblock %}

@@ -850,6 +850,190 @@ def get_dashboard_statistics(conn: sqlite3.Connection) -> dict:
     }
 
 
+# ---------------------------------------------------------------------------
+# Stats page queries
+# ---------------------------------------------------------------------------
+
+# Exclusive last-poll staleness buckets, in days. Each tuple is
+# (label, lower_days_inclusive, upper_days_exclusive); None means open-ended.
+POLL_STALENESS_BUCKETS: list[tuple[str, float | None, float | None]] = [
+    ("< 1 week",     0,   7),
+    ("1–2 weeks",    7,   14),
+    ("2–4 weeks",    14,  28),
+    ("4–8 weeks",    28,  56),
+    ("8+ weeks",     56,  None),
+]
+
+
+def get_paper_date_range(conn: sqlite3.Connection) -> dict:
+    """Summary of paper date coverage.
+
+    Returns oldest/newest rows by ``published_date`` (ignoring NULLs) and the
+    oldest/newest ``ingested_at`` timestamps as the tracking window. Used by
+    the Stats page.
+    """
+    def _fetch(sql: str) -> dict | None:
+        row = conn.execute(sql).fetchone()
+        return _row_to_dict(row)
+
+    oldest_pub = _fetch(
+        "SELECT id, title, published_date FROM papers "
+        "WHERE published_date IS NOT NULL AND published_date != '' "
+        "ORDER BY published_date ASC LIMIT 1"
+    )
+    newest_pub = _fetch(
+        "SELECT id, title, published_date FROM papers "
+        "WHERE published_date IS NOT NULL AND published_date != '' "
+        "ORDER BY published_date DESC LIMIT 1"
+    )
+    oldest_ing = _fetch(
+        "SELECT id, title, ingested_at FROM papers ORDER BY ingested_at ASC LIMIT 1"
+    )
+    newest_ing = _fetch(
+        "SELECT id, title, ingested_at FROM papers ORDER BY ingested_at DESC LIMIT 1"
+    )
+
+    total = conn.execute("SELECT COUNT(*) AS c FROM papers").fetchone()["c"]
+    missing_pub = conn.execute(
+        "SELECT COUNT(*) AS c FROM papers "
+        "WHERE published_date IS NULL OR published_date = ''"
+    ).fetchone()["c"]
+
+    return {
+        "oldest_published": oldest_pub,
+        "newest_published": newest_pub,
+        "oldest_ingested": oldest_ing,
+        "newest_ingested": newest_ing,
+        "total_papers": total,
+        "missing_published_date": missing_pub,
+    }
+
+
+def get_poll_staleness_buckets(
+    conn: sqlite3.Connection,
+    now: str | None = None,
+) -> dict:
+    """Count non-pruned papers by how long since their last citation poll.
+
+    The returned ``buckets`` list preserves the order defined in
+    ``POLL_STALENESS_BUCKETS`` plus a leading "Never polled" entry.
+    ``stale_over_week`` is the count of papers whose last poll is strictly
+    older than 7 days (never-polled papers are included).
+    """
+    if now is None:
+        now = now_utc()
+
+    never_polled = conn.execute(
+        "SELECT COUNT(*) AS c FROM papers "
+        "WHERE status != 'pruned' AND last_cited_check IS NULL"
+    ).fetchone()["c"]
+
+    buckets = [{"label": "Never polled", "count": never_polled}]
+    for label, lo, hi in POLL_STALENESS_BUCKETS:
+        clauses = [
+            "status != 'pruned'",
+            "last_cited_check IS NOT NULL",
+            f"(julianday(:now) - julianday(last_cited_check)) >= {lo}",
+        ]
+        if hi is not None:
+            clauses.append(
+                f"(julianday(:now) - julianday(last_cited_check)) < {hi}"
+            )
+        sql = "SELECT COUNT(*) AS c FROM papers WHERE " + " AND ".join(clauses)
+        count = conn.execute(sql, {"now": now}).fetchone()["c"]
+        buckets.append({"label": label, "count": count})
+
+    stale_over_week = conn.execute(
+        "SELECT COUNT(*) AS c FROM papers "
+        "WHERE status != 'pruned' AND ("
+        "last_cited_check IS NULL "
+        "OR (julianday(:now) - julianday(last_cited_check)) >= 7)",
+        {"now": now},
+    ).fetchone()["c"]
+
+    total = conn.execute(
+        "SELECT COUNT(*) AS c FROM papers WHERE status != 'pruned'"
+    ).fetchone()["c"]
+
+    return {
+        "buckets": buckets,
+        "stale_over_week": stale_over_week,
+        "total_non_pruned": total,
+    }
+
+
+def get_monthly_ingest_counts(
+    conn: sqlite3.Connection, months: int = 12, today: date | None = None
+) -> list[dict]:
+    """Papers ingested per calendar month for the last *months* months.
+
+    Always returns exactly *months* entries, zero-filled, ordered oldest-first
+    as ``[{"month": "YYYY-MM", "count": N}, ...]``.
+    """
+    if today is None:
+        today = date.today()
+
+    raw = {
+        row["m"]: row["c"]
+        for row in conn.execute(
+            "SELECT strftime('%Y-%m', ingested_at) AS m, COUNT(*) AS c "
+            "FROM papers WHERE ingested_at IS NOT NULL "
+            "GROUP BY m"
+        ).fetchall()
+    }
+
+    out: list[dict] = []
+    # Walk back month-by-month, normalizing to the first of the month.
+    cursor = date(today.year, today.month, 1)
+    for _ in range(months):
+        key = cursor.strftime("%Y-%m")
+        out.append({"month": key, "count": raw.get(key, 0)})
+        # previous month
+        if cursor.month == 1:
+            cursor = date(cursor.year - 1, 12, 1)
+        else:
+            cursor = date(cursor.year, cursor.month - 1, 1)
+    out.reverse()
+    return out
+
+
+def get_weekly_citation_updates(
+    conn: sqlite3.Connection, weeks: int = 26, today: date | None = None
+) -> list[dict]:
+    """Citation snapshot rows per ISO week for the last *weeks* weeks.
+
+    Always returns exactly *weeks* entries, zero-filled, ordered oldest-first
+    as ``[{"week_start": "YYYY-MM-DD", "count": N}, ...]``. Weeks start on
+    Monday (ISO-8601) and the key is the Monday date.
+    """
+    if today is None:
+        today = date.today()
+
+    raw = {
+        row["w"]: row["c"]
+        for row in conn.execute(
+            # SQLite's strftime('%W', d) returns the Monday-based week number,
+            # but to get Monday's calendar date we shift by weekday offset.
+            "SELECT date(checked_at, 'weekday 0', '-6 days') AS w, "
+            "COUNT(*) AS c FROM citation_snapshots GROUP BY w"
+        ).fetchall()
+    }
+
+    # Monday of the current week
+    this_monday = today - timedelta(days=today.weekday())
+    out: list[dict] = []
+    for i in range(weeks):
+        wk = this_monday - timedelta(weeks=i)
+        key = wk.isoformat()
+        out.append({"week_start": key, "count": raw.get(key, 0)})
+    out.reverse()
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Existing analytics helpers
+# ---------------------------------------------------------------------------
+
 def get_papers_by_velocity_trend(
     conn: sqlite3.Connection,
     min_velocity: float = 1.0,

@@ -2,6 +2,26 @@
 
 All notable changes to Scholar Inbox Curate will be documented in this file.
 
+## [Unreleased]
+
+### Added
+
+- **Stats tab** (`/stats`) — new top-level page showing:
+  - Oldest and newest paper by publication date, plus the ingestion tracking window.
+  - Last-poll freshness distribution (never polled / <1w / 1–2w / 2–4w / 4–8w / 8+w) with a headline "X of Y papers haven't been polled in the past week" indicator.
+  - Papers ingested per month (last 12 months) as a bar chart.
+  - Citation updates per week (last 26 ISO weeks) as a filled line chart.
+- `src/web/routes/stats.py`, `templates/stats.html`, and stats-specific CSS.
+- Four new db helpers in `src/db.py`: `get_paper_date_range`, `get_poll_staleness_buckets`, `get_monthly_ingest_counts`, `get_weekly_citation_updates`.
+- 24 new tests in `tests/scholar_inbox_curate/web/test_stats.py`.
+- `scripts/merge_old_db.py` — one-shot tool to merge an older `scholar_curate.db` into the current one (papers not in local are inserted; for overlapping papers, old citation snapshots are merged and the local row is replaced only when its `citation_count` is NULL/0).
+- Design doc `docs/scholar_inbox_curate/detailed_design/frontend/08_stats_page.md`.
+
+### Changed
+
+- Base-template nav now includes a Stats entry between Papers and Settings.
+- Chart.js CDN usage expanded — loaded on both paper detail and stats pages via `extra_scripts`.
+
 ## [1.2.0] - 2026-02-27
 
 ### Added

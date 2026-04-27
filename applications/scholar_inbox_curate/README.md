@@ -74,6 +74,7 @@ Then open **http://127.0.0.1:8000** in your browser.
 | Dashboard | `/dashboard` | Summary cards (papers tracked, trending, next poll), top papers by citation velocity, recent ingestion runs |
 | Papers | `/papers` | Full paper list with search, status filter, sortable columns, pagination |
 | Paper Detail | `/papers/{id}` | Full metadata, citation history chart, status controls (promote/prune/restore) |
+| Stats | `/stats` | Database health overview: oldest/newest paper, last-poll freshness buckets, monthly ingestions, weekly citation updates |
 | Settings | `/settings` | Config display, manual trigger buttons, ingestion run history |
 
 #### Manual Triggers (Settings page)
@@ -320,12 +321,14 @@ src/
     ├── routes/
     │   ├── dashboard.py   # Dashboard page handler
     │   ├── papers.py      # Paper list, detail, status update handlers
+    │   ├── stats.py       # Stats page handler (date coverage, poll freshness, trends)
     │   ├── settings.py    # Settings page handler
     │   └── triggers.py    # HTMX trigger handlers (ingest, poll, rules, etc.)
     ├── templates/
     │   ├── base.html      # Base layout (nav, CDN links, HTMX error handlers)
     │   ├── error.html     # 404/500 error page
     │   ├── dashboard.html
+    │   ├── stats.html     # Database stats page
     │   ├── settings.html
     │   ├── papers/
     │   │   ├── list.html

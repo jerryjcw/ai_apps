@@ -119,6 +119,13 @@ def _register_routes(app: FastAPI, templates: Jinja2Templates) -> None:
         db_path = request.app.state.db_path
         return await render_paper_detail(request, paper_id, db_path, templates)
 
+    @app.get("/stats")
+    async def stats(request: Request):
+        from src.web.routes.stats import render_stats
+
+        db_path = request.app.state.db_path
+        return await render_stats(request, db_path, templates)
+
     @app.get("/settings")
     async def settings(request: Request):
         from src.web.routes.settings import render_settings
