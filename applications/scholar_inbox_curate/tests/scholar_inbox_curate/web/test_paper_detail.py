@@ -130,6 +130,76 @@ class TestPaperDetailWithSnapshots:
         assert b'"total"' in resp.content
 
 
+    def test_chart_prefers_s2_over_openalex(self, client, web_config):
+        """Chart uses S2 value when non-zero, ignores openalex 0 on same date."""
+        _add_paper(web_config.db_path)
+        with get_connection(web_config.db_path) as conn:
+            conn.execute(
+                "INSERT INTO citation_snapshots (paper_id, checked_at, total_citations, source) VALUES (?, ?, ?, ?)",
+                ("paper-1", "2026-04-01T10:00:00+00:00", 10, "semantic_scholar"),
+            )
+            conn.execute(
+                "INSERT INTO citation_snapshots (paper_id, checked_at, total_citations, source) VALUES (?, ?, ?, ?)",
+                ("paper-1", "2026-04-11T10:00:00+00:00", 20, "semantic_scholar"),
+            )
+            conn.execute(
+                "INSERT INTO citation_snapshots (paper_id, checked_at, total_citations, source) VALUES (?, ?, ?, ?)",
+                ("paper-1", "2026-04-11T11:00:00+00:00", 0, "openalex"),
+            )
+        resp = client.get("/papers/paper-1")
+        import json
+        text = resp.text
+        idx = text.find("var snapshots = ")
+        assert idx != -1
+        start = text.index("[", idx)
+        end = text.index("]", start) + 1
+        chart_data = json.loads(text[start:end])
+        # Two dates, openalex 0 ignored because S2 has non-zero value
+        assert len(chart_data) == 2
+        assert chart_data[0] == {"date": "2026-04-01", "total": 10}
+        assert chart_data[1] == {"date": "2026-04-11", "total": 20}
+
+    def test_chart_falls_back_to_openalex_when_s2_zero(self, client, web_config):
+        """When S2 returns 0, use OpenAlex value if available and non-zero."""
+        _add_paper(web_config.db_path)
+        with get_connection(web_config.db_path) as conn:
+            # First date: S2 has data
+            conn.execute(
+                "INSERT INTO citation_snapshots (paper_id, checked_at, total_citations, source) VALUES (?, ?, ?, ?)",
+                ("paper-1", "2026-04-01T10:00:00+00:00", 10, "semantic_scholar"),
+            )
+            # Second date: S2 returns 0, openalex has 15
+            conn.execute(
+                "INSERT INTO citation_snapshots (paper_id, checked_at, total_citations, source) VALUES (?, ?, ?, ?)",
+                ("paper-1", "2026-04-11T10:00:00+00:00", 0, "semantic_scholar"),
+            )
+            conn.execute(
+                "INSERT INTO citation_snapshots (paper_id, checked_at, total_citations, source) VALUES (?, ?, ?, ?)",
+                ("paper-1", "2026-04-11T11:00:00+00:00", 15, "openalex"),
+            )
+        resp = client.get("/papers/paper-1")
+        import json
+        text = resp.text
+        idx = text.find("var snapshots = ")
+        start = text.index("[", idx)
+        end = text.index("]", start) + 1
+        chart_data = json.loads(text[start:end])
+        assert len(chart_data) == 2
+        assert chart_data[0] == {"date": "2026-04-01", "total": 10}
+        assert chart_data[1] == {"date": "2026-04-11", "total": 15}
+
+    def test_table_includes_all_sources(self, client, web_config):
+        """Snapshot table should include all sources including OpenAlex."""
+        _add_paper(web_config.db_path)
+        with get_connection(web_config.db_path) as conn:
+            insert_snapshot(conn, "paper-1", 10, "semantic_scholar")
+            insert_snapshot(conn, "paper-1", 0, "openalex")
+        resp = client.get("/papers/paper-1")
+        assert b"Semantic scholar" in resp.content
+        assert b"Openalex" in resp.content
+        assert b"Citation Snapshots (2)" in resp.content
+
+
 class TestPaperDetailStatusSection:
     def test_shows_status_badge(self, client, web_config):
         _add_paper(web_config.db_path, status="active")

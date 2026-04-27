@@ -64,8 +64,16 @@ def poll_citations(ctx: click.Context) -> None:
     from src.citations.poller import run_citation_poll
 
     config: AppConfig = ctx.obj["config"]
-    count = asyncio.run(run_citation_poll(config, config.db_path))
-    click.echo(f"Citation poll complete: {count} papers processed")
+    result = asyncio.run(run_citation_poll(config, config.db_path))
+    click.echo(f"Citation poll complete: {result.papers_processed} papers processed")
+    click.echo(f"Papers with citation changes: {result.papers_with_changes}")
+    click.echo(f"Total citation delta: {result.total_citation_delta:+d}")
+    if result.changed_papers:
+        click.echo("Changed papers:")
+        for p in sorted(result.changed_papers, key=lambda x: x["new"] - x["old"], reverse=True):
+            delta = p["new"] - p["old"]
+            title = p["title"][:60] + ("..." if len(p["title"]) > 60 else "")
+            click.echo(f"  {delta:+d}  {title}  ({p['old']} -> {p['new']})")
 
 
 @cli.command("collect-citations")

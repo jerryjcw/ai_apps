@@ -8,6 +8,7 @@ velocity, and persisting results.
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
 import httpx
@@ -20,6 +21,17 @@ logger = logging.getLogger(__name__)
 
 # OpenAlex is checked at most once per month per paper.
 _OPENALEX_INTERVAL_DAYS = 30
+
+
+@dataclass
+class CitationPollResult:
+    """Summary of a citation polling run."""
+
+    papers_processed: int = 0
+    papers_with_changes: int = 0
+    total_citation_delta: int = 0
+    changed_papers: list[dict] = field(default_factory=list)
+    """Each entry: {"id": str, "title": str, "old": int, "new": int}"""
 
 
 def _should_fetch_openalex(paper: dict, now: datetime) -> bool:
@@ -38,10 +50,10 @@ def _should_fetch_openalex(paper: dict, now: datetime) -> bool:
         return True
 
 
-async def run_citation_poll(config: AppConfig, db_path: str) -> int:
+async def run_citation_poll(config: AppConfig, db_path: str) -> CitationPollResult:
     """Run one full citation polling cycle.
 
-    Returns the number of papers processed.
+    Returns a :class:`CitationPollResult` with details on what changed.
     """
     now_dt = datetime.now(timezone.utc)
     now_iso = now_dt.isoformat()
@@ -53,7 +65,7 @@ async def run_citation_poll(config: AppConfig, db_path: str) -> int:
 
     if not papers:
         logger.info("No papers due for citation polling")
-        return 0
+        return CitationPollResult()
 
     logger.info(
         "Polling citations for %d papers (budget %d of %d total)",
@@ -77,12 +89,26 @@ async def run_citation_poll(config: AppConfig, db_path: str) -> int:
         # ----------------------------------------------------------
         # Step 2: Record snapshots, compute velocity, update papers
         # ----------------------------------------------------------
+        result = CitationPollResult(papers_processed=len(papers))
+
         with db.get_connection(db_path) as conn:
             for paper in papers:
                 pid = paper["id"]
                 count = s2_counts.get(pid)
                 if count is not None:
                     db.insert_snapshot(conn, pid, count, "semantic_scholar")
+
+                    old_count = paper.get("citation_count", 0) or 0
+                    if count != old_count:
+                        delta = count - old_count
+                        result.papers_with_changes += 1
+                        result.total_citation_delta += delta
+                        result.changed_papers.append({
+                            "id": pid,
+                            "title": paper.get("title", ""),
+                            "old": old_count,
+                            "new": count,
+                        })
 
             # Recompute velocity for all papers that got new counts
             updated_ids = [pid for pid in paper_ids if pid in s2_counts]
@@ -114,16 +140,16 @@ async def run_citation_poll(config: AppConfig, db_path: str) -> int:
                     elif paper.get("arxiv_id"):
                         doi = None  # arXiv papers may not have DOI in ID
 
-                    result = await openalex.fetch_yearly_citations(
+                    oa_result = await openalex.fetch_yearly_citations(
                         client, doi, paper.get("title"), email
                     )
-                    if result:
+                    if oa_result:
                         db.insert_snapshot(
                             conn,
                             pid,
-                            result["total"],
+                            oa_result["total"],
                             "openalex",
-                            yearly_breakdown=result["by_year"],
+                            yearly_breakdown=oa_result["by_year"],
                         )
 
         # ----------------------------------------------------------
@@ -136,8 +162,11 @@ async def run_citation_poll(config: AppConfig, db_path: str) -> int:
                     (now_iso, paper["id"]),
                 )
 
-    logger.info("Citation poll complete: %d papers processed", len(papers))
-    return len(papers)
+    logger.info(
+        "Citation poll complete: %d papers processed, %d with changes",
+        result.papers_processed, result.papers_with_changes,
+    )
+    return result
 
 
 async def collect_citations_for_unpolled(config: AppConfig, db_path: str) -> int:

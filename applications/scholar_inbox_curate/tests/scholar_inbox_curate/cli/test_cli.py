@@ -129,14 +129,29 @@ class TestIngest:
 
 class TestPollCitations:
     def test_successful_poll(self, runner, cli_config):
+        from src.citations.poller import CitationPollResult
+
+        poll_result = CitationPollResult(
+            papers_processed=10,
+            papers_with_changes=3,
+            total_citation_delta=25,
+            changed_papers=[
+                {"id": "p1", "title": "Paper One", "old": 5, "new": 20},
+                {"id": "p2", "title": "Paper Two", "old": 0, "new": 8},
+                {"id": "p3", "title": "Paper Three", "old": 10, "new": 12},
+            ],
+        )
         with patch(
             "src.citations.poller.run_citation_poll",
             new_callable=AsyncMock,
-            return_value=10,
+            return_value=poll_result,
         ):
             result = _invoke(runner, cli_config, ["poll-citations"])
         assert result.exit_code == 0
         assert "10 papers processed" in result.output
+        assert "Papers with citation changes: 3" in result.output
+        assert "+25" in result.output
+        assert "Changed papers:" in result.output
 
 
 # ---------------------------------------------------------------------------

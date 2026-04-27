@@ -117,9 +117,22 @@ async def render_paper_detail(
         except (json.JSONDecodeError, TypeError):
             authors = []
 
+    # Build chart data: prefer semantic_scholar, fall back to openalex if S2 is 0
+    chart_by_date: dict[str, dict] = {}
+    for s in snapshots:
+        date_key = s["checked_at"][:10]
+        source = s["source"]
+        count = s["total_citations"]
+        if source == "semantic_scholar":
+            if date_key not in chart_by_date or chart_by_date[date_key]["src"] != "semantic_scholar" or chart_by_date[date_key]["total"] == 0:
+                chart_by_date[date_key] = {"total": count, "src": source}
+        elif source == "openalex" and count > 0:
+            existing = chart_by_date.get(date_key)
+            if existing is None or existing["total"] == 0:
+                chart_by_date[date_key] = {"total": count, "src": source}
     snapshots_json = json.dumps([
-        {"date": s["checked_at"][:10], "total": s["total_citations"]}
-        for s in snapshots
+        {"date": d, "total": v["total"]}
+        for d, v in sorted(chart_by_date.items())
     ])
 
     return templates.TemplateResponse(

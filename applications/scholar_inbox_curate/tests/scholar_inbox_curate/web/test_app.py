@@ -172,6 +172,52 @@ class TestPartialRoutes:
         assert resp.status_code == 200
 
 
+class TestPaginationPreservesSort:
+    """Pagination links must carry current sort/order so page changes don't reset sort."""
+
+    @pytest.fixture
+    def client_with_many_papers(self, web_config):
+        """Insert 30 papers (> PAGE_SIZE=25) so pagination appears."""
+        with get_connection(web_config.db_path) as conn:
+            for i in range(30):
+                conn.execute(
+                    """INSERT INTO papers
+                       (id, title, authors, status, citation_velocity, ingested_at)
+                       VALUES (?, ?, ?, 'active', ?, datetime('now', ?))""",
+                    (f"paper-{i}", f"Paper {i}", "Author A", float(i), f"-{i} minutes"),
+                )
+        app = create_app(web_config)
+        return TestClient(app, follow_redirects=False)
+
+    def test_partial_pagination_includes_sort_params(self, client_with_many_papers):
+        """When sort=ingested_at, pagination links must include that sort value."""
+        resp = client_with_many_papers.get(
+            "/partials/paper-rows?sort=ingested_at&order=desc&page=1",
+            headers={"HX-Request": "true"},
+        )
+        assert resp.status_code == 200
+        body = resp.text
+        # "Next" link must carry sort=ingested_at
+        assert '"sort": "ingested_at"' in body
+        assert '"order": "desc"' in body
+        # Page 2 link must also carry sort
+        assert '"page": "2"' in body
+
+    def test_pagination_does_not_revert_to_default_sort(self, client_with_many_papers):
+        """Page 2 with sort=ingested_at must still render sorted by ingested_at."""
+        resp = client_with_many_papers.get(
+            "/partials/paper-rows?sort=ingested_at&order=asc&page=2",
+            headers={"HX-Request": "true"},
+        )
+        assert resp.status_code == 200
+        body = resp.text
+        # The column header should show ingested_at as the active sort
+        assert 'aria-sort=' in body
+        # Previous link must preserve sort
+        assert '"sort": "ingested_at"' in body
+        assert '"order": "asc"' in body
+
+
 class TestErrorHandlers:
     def test_404_returns_html_error_page(self, client):
         resp = client.get("/nonexistent-route")

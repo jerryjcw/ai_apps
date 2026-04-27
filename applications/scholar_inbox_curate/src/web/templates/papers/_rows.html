@@ -108,7 +108,7 @@
         <li>
             <a href="#"
                hx-get="/partials/paper-rows"
-               hx-vals='{"page": "{{ current_page - 1 }}"}'
+               hx-vals='{"page": "{{ current_page - 1 }}", "sort": "{{ sort_by }}", "order": "{{ sort_order }}"}'
                hx-target="#paper-table-body"
                hx-include="#paper-filters"
                hx-push-url="true">
@@ -124,7 +124,7 @@
             <li>
                 <a href="#"
                    hx-get="/partials/paper-rows"
-                   hx-vals='{"page": "{{ p }}"}'
+                   hx-vals='{"page": "{{ p }}", "sort": "{{ sort_by }}", "order": "{{ sort_order }}"}'
                    hx-target="#paper-table-body"
                    hx-include="#paper-filters"
                    hx-push-url="true">
@@ -140,7 +140,7 @@
         <li>
             <a href="#"
                hx-get="/partials/paper-rows"
-               hx-vals='{"page": "{{ current_page + 1 }}"}'
+               hx-vals='{"page": "{{ current_page + 1 }}", "sort": "{{ sort_by }}", "order": "{{ sort_order }}"}'
                hx-target="#paper-table-body"
                hx-include="#paper-filters"
                hx-push-url="true">

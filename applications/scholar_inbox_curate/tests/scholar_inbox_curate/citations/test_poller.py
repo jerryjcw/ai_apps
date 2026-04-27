@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from src.citations.poller import (
+    CitationPollResult,
     _should_fetch_openalex,
     collect_citations_for_unpolled,
     run_citation_poll,
@@ -70,7 +71,8 @@ class TestRunCitationPoll:
             config = MagicMock()
             config.citations.poll_budget_fraction = 0.10
             result = await run_citation_poll(config, ":memory:")
-            assert result == 0
+            assert result.papers_processed == 0
+            assert result.papers_with_changes == 0
 
     @pytest.mark.asyncio
     async def test_full_poll_flow(self):
@@ -81,12 +83,14 @@ class TestRunCitationPoll:
                 "title": "Test Paper 1",
                 "arxiv_id": "2301.00001",
                 "last_cited_check": None,
+                "citation_count": 10,
             },
             {
                 "id": "s2hash123",
                 "title": "Test Paper 2",
                 "arxiv_id": None,
                 "last_cited_check": None,
+                "citation_count": 15,
             },
         ]
 
@@ -139,7 +143,12 @@ class TestRunCitationPoll:
             config.citations.poll_budget_fraction = 0.10
 
             result = await run_citation_poll(config, ":memory:")
-            assert result == 2
+            assert result.papers_processed == 2
+            # Paper 1: 10 -> 42 (+32), Paper 2: 15 -> 15 (no change)
+            assert result.papers_with_changes == 1
+            assert result.total_citation_delta == 32
+            assert len(result.changed_papers) == 1
+            assert result.changed_papers[0]["id"] == "arxiv:2301.00001"
 
             # Verify budget was computed: floor(20 * 0.10) = 2
             mock_db.get_papers_due_for_poll.assert_called_once()
@@ -205,7 +214,8 @@ class TestRunCitationPoll:
             config.citations.poll_budget_fraction = 0.10
 
             result = await run_citation_poll(config, ":memory:")
-            assert result == 1
+            assert result.papers_processed == 1
+            assert result.papers_with_changes == 0
 
             # No snapshot should be inserted (S2 returned nothing for title: papers)
             mock_db.insert_snapshot.assert_not_called()
@@ -322,6 +332,141 @@ class TestRunCitationPoll:
 
             call_kwargs = mock_db.get_papers_due_for_poll.call_args
             assert call_kwargs[1]["limit"] == 15  # floor(150 * 0.10)
+
+
+# ---------------------------------------------------------------------------
+# CitationPollResult change tracking
+# ---------------------------------------------------------------------------
+
+class TestCitationChangeTracking:
+    @pytest.mark.asyncio
+    async def test_all_papers_changed(self):
+        """All papers have citation count changes."""
+        papers = [
+            {"id": "p1", "title": "Paper A", "arxiv_id": None,
+             "last_cited_check": None, "citation_count": 5},
+            {"id": "p2", "title": "Paper B", "arxiv_id": None,
+             "last_cited_check": None, "citation_count": 0},
+        ]
+
+        with (
+            patch("src.citations.poller.db") as mock_db,
+            patch("src.citations.poller.semantic_scholar") as mock_s2,
+            patch("src.citations.poller.velocity") as mock_vel,
+            patch("src.citations.poller.openalex") as mock_oa,
+            patch("src.citations.poller.httpx") as mock_httpx,
+        ):
+            mock_conn = MagicMock()
+            mock_db.get_connection.return_value.__enter__ = MagicMock(return_value=mock_conn)
+            mock_db.get_connection.return_value.__exit__ = MagicMock(return_value=False)
+            mock_db.count_non_pruned_papers.return_value = 20
+            mock_db.get_papers_due_for_poll.return_value = papers
+
+            mock_s2.fetch_citations_batch = AsyncMock(return_value={"p1": 10, "p2": 3})
+            mock_vel.update_velocities_bulk = MagicMock()
+            mock_vel.compute_velocity = MagicMock(return_value=1.0)
+            mock_oa.fetch_yearly_citations = AsyncMock(return_value=None)
+
+            mock_client = AsyncMock()
+            mock_httpx.AsyncClient.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_httpx.AsyncClient.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            config = MagicMock()
+            config.secrets.semantic_scholar_api_key = "key"
+            config.secrets.scholar_inbox_email = "t@e.com"
+            config.citations.semantic_scholar_batch_size = 100
+            config.citations.poll_budget_fraction = 0.10
+
+            result = await run_citation_poll(config, ":memory:")
+            assert result.papers_processed == 2
+            assert result.papers_with_changes == 2
+            # p1: 5->10 (+5), p2: 0->3 (+3) = +8
+            assert result.total_citation_delta == 8
+            assert len(result.changed_papers) == 2
+
+    @pytest.mark.asyncio
+    async def test_no_changes(self):
+        """Citations unchanged → papers_with_changes is 0."""
+        papers = [
+            {"id": "p1", "title": "Stable", "arxiv_id": None,
+             "last_cited_check": None, "citation_count": 42},
+        ]
+
+        with (
+            patch("src.citations.poller.db") as mock_db,
+            patch("src.citations.poller.semantic_scholar") as mock_s2,
+            patch("src.citations.poller.velocity") as mock_vel,
+            patch("src.citations.poller.openalex") as mock_oa,
+            patch("src.citations.poller.httpx") as mock_httpx,
+        ):
+            mock_conn = MagicMock()
+            mock_db.get_connection.return_value.__enter__ = MagicMock(return_value=mock_conn)
+            mock_db.get_connection.return_value.__exit__ = MagicMock(return_value=False)
+            mock_db.count_non_pruned_papers.return_value = 10
+            mock_db.get_papers_due_for_poll.return_value = papers
+
+            mock_s2.fetch_citations_batch = AsyncMock(return_value={"p1": 42})
+            mock_vel.update_velocities_bulk = MagicMock()
+            mock_vel.compute_velocity = MagicMock(return_value=0.0)
+            mock_oa.fetch_yearly_citations = AsyncMock(return_value=None)
+
+            mock_client = AsyncMock()
+            mock_httpx.AsyncClient.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_httpx.AsyncClient.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            config = MagicMock()
+            config.secrets.semantic_scholar_api_key = "key"
+            config.secrets.scholar_inbox_email = "t@e.com"
+            config.citations.semantic_scholar_batch_size = 100
+            config.citations.poll_budget_fraction = 0.10
+
+            result = await run_citation_poll(config, ":memory:")
+            assert result.papers_processed == 1
+            assert result.papers_with_changes == 0
+            assert result.total_citation_delta == 0
+            assert result.changed_papers == []
+
+    @pytest.mark.asyncio
+    async def test_missing_citation_count_defaults_to_zero(self):
+        """Papers without citation_count key treated as 0."""
+        papers = [
+            {"id": "p1", "title": "New Paper", "arxiv_id": None,
+             "last_cited_check": None},
+        ]
+
+        with (
+            patch("src.citations.poller.db") as mock_db,
+            patch("src.citations.poller.semantic_scholar") as mock_s2,
+            patch("src.citations.poller.velocity") as mock_vel,
+            patch("src.citations.poller.openalex") as mock_oa,
+            patch("src.citations.poller.httpx") as mock_httpx,
+        ):
+            mock_conn = MagicMock()
+            mock_db.get_connection.return_value.__enter__ = MagicMock(return_value=mock_conn)
+            mock_db.get_connection.return_value.__exit__ = MagicMock(return_value=False)
+            mock_db.count_non_pruned_papers.return_value = 10
+            mock_db.get_papers_due_for_poll.return_value = papers
+
+            mock_s2.fetch_citations_batch = AsyncMock(return_value={"p1": 7})
+            mock_vel.update_velocities_bulk = MagicMock()
+            mock_vel.compute_velocity = MagicMock(return_value=1.0)
+            mock_oa.fetch_yearly_citations = AsyncMock(return_value=None)
+
+            mock_client = AsyncMock()
+            mock_httpx.AsyncClient.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_httpx.AsyncClient.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            config = MagicMock()
+            config.secrets.semantic_scholar_api_key = "key"
+            config.secrets.scholar_inbox_email = "t@e.com"
+            config.citations.semantic_scholar_batch_size = 100
+            config.citations.poll_budget_fraction = 0.10
+
+            result = await run_citation_poll(config, ":memory:")
+            assert result.papers_with_changes == 1
+            assert result.total_citation_delta == 7
+            assert result.changed_papers[0]["old"] == 0
+            assert result.changed_papers[0]["new"] == 7
 
 
 # ---------------------------------------------------------------------------
